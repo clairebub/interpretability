@@ -1,0 +1,8 @@
+torchvision==0.3.0
+torch==1.1.0
+tqdm==4.31.1
+numpy==1.16.2
+nvidia-ml-py3
+lmdb
+tensorboardX
+tensorflow
