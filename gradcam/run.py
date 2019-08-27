@@ -1,9 +1,4 @@
-#!/usr/bin/env python
-# coding: utf-8
-#
-# Author:   Kazuto Nakashima
-# URL:      http://kazuto1011.github.io
-# Created:  2017-05-18
+# Modified based on http://kazuto1011.github.io
 
 from __future__ import print_function
 
@@ -116,6 +111,7 @@ def main(ctx):
 
 @main.command()
 @click.option("-i", "--image-paths", type=str, multiple=True, required=True)
+# @click.option("-t", "--task", type=str, required=True)
 @click.option("-a", "--arch", type=click.Choice(model_names), required=True)
 @click.option("-k", "--topk", type=int, default=3)
 @click.option("-o", "--output-dir", type=str, default="./results")

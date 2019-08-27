@@ -10,7 +10,12 @@ PyTorch implementation of Grad-CAM (Gradient-weighted Class Activation Mapping) 
 * opencv
 * tqdm
 
-## Basic usage
+## Usage for ISIC2019 Classification
+```sh
+python run.py isic2019 [OPTIONS]
+```
+
+## Original usage
 
 ```sh
 python main.py demo1 [OPTIONS]
