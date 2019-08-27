@@ -5,30 +5,13 @@ import numpy as np
 import sklearn.metrics as sk
 
 
-def fpr95_old(ind_confidences, ood_confidences):
+def fpr95_approx(ind_confidences, ood_confidences):
     """calculate the false positive error when tpr is 95%"""
 
     y1 = ood_confidences
     x1 = ind_confidences
     threshold = np.percentile(x1, 5)
     fpr_base = np.sum(np.sum(y1 > threshold)) / np.float(len(y1))
-
-    """
-    start = np.min([np.min(x1), np.min(y1)])
-    end = np.max([np.max(x1), np.max(y1)])
-    gap = (end - start) / 100000
-
-    total = 0.0
-    fpr = 0.0
-
-    for threshold in np.arange(start, end, gap):
-        tpr = np.sum(np.sum(x1 >= threshold)) / np.float(len(x1))
-        error2 = np.sum(np.sum(y1 > threshold)) / np.float(len(y1))
-        if tpr <= 0.9505 and tpr >= 0.9495:
-            fpr += error2
-            total += 1
-    fpr_base = fpr / total
-    """
 
     return fpr_base, threshold
 
@@ -48,11 +31,13 @@ def fpr95(ind_confidences, ood_confidences):
 
     total = 0.0
     fpr = 0.0
+    threshold = 0.0
     for delta in np.arange(start, end, gap):
         tpr = np.sum(np.sum(X1 >= delta)) / np.float(len(X1))
         error2 = np.sum(np.sum(Y1 > delta)) / np.float(len(Y1))
         if tpr <= 0.9505 and tpr >= 0.9495:
             fpr += error2
+            threshold += delta
             total += 1
 
     if total == 0:
@@ -60,8 +45,9 @@ def fpr95(ind_confidences, ood_confidences):
         fprBase = 1
     else:
         fprBase = fpr / total
+        threshold = threshold / total
 
-    return fprBase
+    return fprBase, threshold
 
 
 def detection(ind_confidences, ood_confidences, n_iter=100000, return_data=False):
@@ -101,13 +87,14 @@ def cal_metrics(measure_in, measure_out):
     """calculate OOD evaluation metrics"""
 
     # FNR@TPR95
-    fpr = fpr95(measure_in, measure_out)
-    print("FNR@TPR95 (larger is better): ", 1 - fpr)
+    fpr, threshold = fpr95(measure_in, measure_out)
+    print("FNR@TPR95 (higher is better): ", 1 - fpr)
+    print("TPR95 threshold:", threshold)
 
     # detection error
     detection_error, best_threshold = detection(measure_in, measure_out)
     print("Detection error (lower is better): ", detection_error)
-    print("Best threshold:", best_threshold)
+    print("Detection best threshold:", best_threshold)
 
     # create_ood_lbl
     all_mea = [np.ones_like(measure_in), np.zeros_like(measure_out)]
@@ -130,4 +117,4 @@ def cal_metrics(measure_in, measure_out):
     # Mean of out-dist measure
     out_mea_mean = np.mean(measure_out)
 
-    return 1 - fpr, detection_error, auroc, aupr_in, aupr_out, out_mea_mean
+    return 1 - fpr, threshold, detection_error, best_threshold, auroc, aupr_in, aupr_out, out_mea_mean

@@ -35,29 +35,32 @@ from test_ood_base_model import test_with_ood
 
 """input arguments"""
 task_options = ['skin', 'age_approx', 'anatom_site_general', 'sex']
-model_options = ['densenet121', 'densenet161', 'densenet169', 'densenet201', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'vgg13', 'vgg16']
+model_options = ['densenet121', 'densenet161', 'densenet169', 'densenet201', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'resnext101_32x8d', 'vgg13', 'vgg16']
 model_customize_options = ['base', 'cosine', 'ensemble']
 optim_options = ['SGD', 'Adam', 'RMSprop']
-ood_options = ['tinyImageNet_resize', 'LSUN_resize', 'iSUN', 'cifar10', 'cifar100', 'svhn']
+ood_dataset = ['tinyImageNet_resize', 'LSUN_resize', 'iSUN', 'cifar10', 'cifar100', 'svhn']
+ood_options = ['base', 'odin', 'cosine']
 
 parser = argparse.ArgumentParser(description='train_model')
 parser.add_argument('--gpu_no', type=int, default=4)
 parser.add_argument('--task', default='skin', choices=task_options)
 parser.add_argument('--dataset', default='isic2019')
-parser.add_argument('--ood_dataset', default='LSUN_resize', choices=ood_options)
-parser.add_argument('--model', default='resnext101_32x8d', choices=model_options)
-parser.add_argument('--model_customize', default='ensemble', choices=model_customize_options)
+parser.add_argument('--ood_dataset', default='cifar10', choices=ood_dataset)
+parser.add_argument('--model', default='resnet34', choices=model_options)
+parser.add_argument('--model_customize', default='base', choices=model_customize_options)
+parser.add_argument('--ood_method', default='odin', choices=ood_options)
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--epochs', type=int, default=500)
 parser.add_argument('--seed', type=int, default=0)
 parser.add_argument('--optim', default='SGD', choices=optim_options)
 parser.add_argument('--learning_rate', type=float, default=0.001)
 parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
-parser.add_argument('--data_augmentation', action='store_true', default=False, help='augment data by color')
-parser.add_argument('--test', type=bool, default=True)
+parser.add_argument('--train_augmentation', type=bool, default=False, help='augment train data by color')
+parser.add_argument('--test', type=bool, default=False)
+parser.add_argument('--test_augmentation', type=bool, default=False, help='augment test data by five crop')
 parser.add_argument('--error_analysis', type=bool, default=False)
-parser.add_argument('--generate_result', type=bool, default=True)
-parser.add_argument('--validation', type=bool, default=False)
+parser.add_argument('--generate_result', type=bool, default=False)
+parser.add_argument('--validation', type=bool, default=True)
 parser.add_argument('--pretrained', type=bool, default=True)
 
 # get and show input arguments
@@ -90,7 +93,7 @@ folder_name = args.model_customize + '_' + args.task
 
 filename = args.dataset + '_' \
            + args.task + '_' \
-           + ('aug' if args.data_augmentation else 'noaug') + '_' \
+           + ('aug' if args.train_augmentation else 'noaug') + '_' \
            + args.model_customize + '_' \
            + args.model + '_' \
            + str(args.batch_size) + '_' \
@@ -122,8 +125,9 @@ tb_writer = SummaryWriter(tensorboard_path)
 normalize = transforms.Normalize(mean=[0.6796547, 0.5259538, 0.51874095], std=[0.18123391, 0.18504128, 0.19822954])
 
 # load training data
-if args.data_augmentation:
-    train_transform = transforms.Compose([transforms.RandomResizedCrop(224),
+if args.train_augmentation:
+    train_transform = transforms.Compose([transforms.Resize(256),
+                                          transforms.RandomResizedCrop(224),
                                           transforms.ColorJitter(brightness=0.05, contrast=0.05, saturation=0.05, hue=0.05),
                                           transforms.RandomHorizontalFlip(),
                                           transforms.RandomVerticalFlip(),
@@ -131,7 +135,8 @@ if args.data_augmentation:
                                           transforms.ToTensor(),
                                           normalize])
 else:
-    train_transform = transforms.Compose([transforms.RandomResizedCrop(224),
+    train_transform = transforms.Compose([transforms.Resize(256),
+                                          transforms.RandomResizedCrop(224),
                                           transforms.RandomHorizontalFlip(),
                                           transforms.ToTensor(),
                                           normalize])
@@ -194,9 +199,13 @@ ood_loader = torch.utils.data.DataLoader(dataset=ood_dataset,
 if args.model_customize == 'base':
     cnn = models.__dict__[args.model](pretrained=args.pretrained)
 elif args.model_customize == 'cosine':
-    cnn = cosine_net.CosineNet(models.__dict__[args.model](pretrained=args.pretrained))
-elif args.model_customize == 'ensemble':
+    cnn = cosine_net.CosineNet(models.__dict__[args.model](pretrained=args.pretrained), num_classes)
+elif 'ensemble' in args.model_customize:
     # add the models to be ensembled
+
+    # print('Loading pretrained resnet50 model...')
+    # cnn_resnet50 = nn.DataParallel(ml.resnet50(pretrained=args.pretrained))
+    # cnn_resnet50.load_state_dict(torch.load('checkpoints/base_skin/isic2019_skin_noaug_base_resnet50_256_ft_full.pt'))
 
     print('Loading pretrained resnet101 model...')
     cnn_resnet101 = nn.DataParallel(ml.resnet101(pretrained=args.pretrained))
@@ -206,12 +215,23 @@ elif args.model_customize == 'ensemble':
     cnn_resnet152 = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
     cnn_resnet152.load_state_dict(torch.load('checkpoints/base_skin/isic2019_skin_noaug_base_resnet152_256_ft_full.pt'))
 
-    # print('Loading pretrained resnext101_32x8d model...')
-    # cnn_resnext101_32x8d = nn.DataParallel(ml.resnext101_32x8d(pretrained=args.pretrained))
-    # cnn_resnext101_32x8d.load_state_dict(torch.load('checkpoints/base_skin/isic2019_skin_noaug_base_resnext101_32x8d_256_ft_full.pt'))
+    if 'meta' not in args.model_customize:
+        cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet101, cnn_resnet152], num_classes)
+    else:
+        # load meta data pretrained models
+        print('Loading pretrained age_approx resnet152 model...')
+        cnn_age_approx = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
+        cnn_age_approx.load_state_dict(torch.load('checkpoints/base_age_approx/isic2019_age_approx_noaug_base_resnet152_256_ft_full.pt'))
 
-    cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet101, cnn_resnet152], num_classes)
-    # cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet101, cnn_resnet152, cnn_resnext101_32x8d], num_classes)
+        print('Loading pretrained anatom_site_general resnet152 model...')
+        cnn_anatom_site_general = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
+        cnn_anatom_site_general.load_state_dict(torch.load('checkpoints/base_anatom_site_general/isic2019_anatom_site_general_noaug_base_resnet152_256_ft_full.pt'))
+
+        print('Loading pretrained sex resnet152 model...')
+        cnn_sex = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
+        cnn_sex.load_state_dict(torch.load('checkpoints/base_sex/isic2019_sex_noaug_base_resnet152_256_ft_full.pt'))
+
+        cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet101, cnn_resnet152, cnn_age_approx, cnn_anatom_site_general, cnn_sex], num_classes)
 else:
     raise RuntimeError('customized model not supported')
 
@@ -230,6 +250,9 @@ if os.path.isfile(model_file):
 else:
     if not os.path.exists('checkpoints/' + folder_name):
         os.makedirs('checkpoints/' + folder_name)
+
+    if args.test:
+        raise RuntimeError('model not trained')
 
 
 def test(data_loader):
@@ -274,9 +297,6 @@ def test(data_loader):
     correct = np.array(correct).astype(bool)
     test_acc = np.mean(correct)
 
-    # output accuracy results
-    tqdm.write('test_acc: %.4f' % test_acc)
-
     return test_acc
 
 
@@ -320,6 +340,7 @@ def train():
             cnn.zero_grad()
 
             pred_original = cnn(images)
+
             pred_original = torch.softmax(pred_original, dim=-1)
 
             # make sure we don't have any numerical instability
@@ -354,6 +375,10 @@ def train():
             test_acc = test(test_loader)
             test_balanced_acc = test(test_balanced_loader)
 
+            # output accuracy results
+            tqdm.write('test_acc: %.4f' % test_acc)
+            tqdm.write('test_balanced_acc: %.4f' % test_balanced_acc)
+
             # write log for tensorboard
             tb_writer.add_scalar('Test_Accuracy', test_acc, epoch)
             tb_writer.add_scalar('Test_Balanced_Accuracy', test_balanced_acc, epoch)
@@ -378,7 +403,7 @@ if args.test:
     test_with_ood(cnn, filename, test_loader, ood_loader, classes, generate_result=args.generate_result, validation=args.validation)
 
     if args.validation:
-        print("Testing on balanced test data...")
+        print("\nTesting on balanced test data...")
         test_with_ood(cnn, filename, test_balanced_loader, ood_loader, classes, generate_result=args.generate_result, validation=args.validation)
 
 else:
