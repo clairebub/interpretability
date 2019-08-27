@@ -1,0 +1,28 @@
+medical deep learning:
+https://stats.stackexchange.com/questions/384484/how-should-i-standardize-input-when-fine-tuning-a-cnn
+https://www.jidonline.org/article/S0022-202X(18)30111-8/pdf
+
+grad-cam:
+https://arxiv.org/pdf/1610.02391.pdf
+https://github.com/kazuto1011/grad-cam-pytorch
+https://github.com/jacobgil/pytorch-grad-cam
+
+data augmentation:
+https://arxiv.org/pdf/1907.12896.pdf
+https://arxiv.org/pdf/1612.06341.pdf
+https://github.com/fabioperez/pytorch-examples
+
+dcgan:
+https://github.com/pytorch/examples/tree/master/dcgan
+
+multi-scale densenet:
+https://arxiv.org/pdf/1703.09844.pdf
+https://github.com/kalviny/MSDNet-PyTorch
+
+OOD Methods:
+Tcosine: https://github.com/engkarat/cosine-ood-detector (https://arxiv.org/pdf/1905.10628.pdf)
+Mahalanobis: https://github.com/pokaxpoka/deep_Mahalanobis_detector
+ODIN: https://github.com/facebookresearch/odin
+
+challenge evaluation:
+isic-challenge-scoring classification /path/to/ISIC_GroundTruth.csv /path/to/ISIC_prediction.csv
