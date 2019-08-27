@@ -399,12 +399,17 @@ def train():
 
 
 if args.test:
+    if args.model_customize == 'cosine':
+        ood_method = 'cosine'
+    else:
+        ood_method = args.ood_method
+
     print("Testing on original test data...")
-    test_with_ood(cnn, filename, test_loader, ood_loader, classes, generate_result=args.generate_result, validation=args.validation)
+    test_with_ood(cnn, filename, test_loader, ood_loader, classes, ood_method=ood_method, generate_result=args.generate_result, validation=args.validation)
 
     if args.validation:
         print("\nTesting on balanced test data...")
-        test_with_ood(cnn, filename, test_balanced_loader, ood_loader, classes, generate_result=args.generate_result, validation=args.validation)
+        test_with_ood(cnn, filename, test_balanced_loader, ood_loader, classes, ood_method=ood_method, generate_result=args.generate_result, validation=args.validation)
 
 else:
     train()
