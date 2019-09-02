@@ -22,16 +22,16 @@ import argparse
 import torch
 from torchvision import datasets, transforms
 
-classes = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC']
+# classes = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC']
 
 
 def five_fold_split_isic2019():
-    if not os.path.exists('./data/isic2019/isic2019_skin_training'):
-        os.makedirs('./data/isic2019/isic2019_skin_training')
-    if not os.path.exists('./data/isic2019/isic2019_skin_testing'):
-        os.makedirs('./data/isic2019/isic2019_skin_testing')
+    if not os.path.exists('../data/isic2019/skin_training'):
+        os.makedirs('../data/isic2019/skin_training')
+    if not os.path.exists('../data/isic2019/skin_testing'):
+        os.makedirs('../data/isic2019/skin_testing')
 
-    with open('./data/isic2019/ISIC_2019_Training_GroundTruth.csv', 'r') as gt_in:
+    with open('../data/isic2019/ISIC_2019_Training_GroundTruth.csv', 'r') as gt_in:
         # skip first line
         next(gt_in)
 
@@ -47,23 +47,23 @@ def five_fold_split_isic2019():
             p = random.uniform(0, 1)
 
             if p >= 0.2:
-                if not os.path.exists('./data/isic2019/isic2019_skin_training/%s' % classes[class_label]):
-                    os.makedirs('./data/isic2019/isic2019_skin_training/%s' % classes[class_label])
+                if not os.path.exists('../data/isic2019/skin_training/%s' % classes[class_label]):
+                    os.makedirs('../data/isic2019/skin_training/%s' % classes[class_label])
 
-                shutil.move('./data/isic2019/ISIC_2019_Training_Input/%s.jpg' % img_file, './data/isic2019/isic2019_skin_training/%s' % classes[class_label])
+                shutil.move('../data/isic2019/ISIC_2019_Training_Input/%s.jpg' % img_file, '../data/isic2019/skin_training/%s' % classes[class_label])
 
             else:
-                if not os.path.exists('./data/isic2019/isic2019_skin_testing/%s' % classes[class_label]):
-                    os.makedirs('./data/isic2019/isic2019_skin_testing/%s' % classes[class_label])
+                if not os.path.exists('../data/isic2019/skin_testing/%s' % classes[class_label]):
+                    os.makedirs('../data/isic2019/skin_testing/%s' % classes[class_label])
 
-                shutil.move('./data/isic2019/ISIC_2019_Training_Input/%s.jpg' % img_file, './data/isic2019/isic2019_skin_testing/%s' % classes[class_label])
+                shutil.move('../data/isic2019/ISIC_2019_Training_Input/%s.jpg' % img_file, '../data/isic2019/skin_testing/%s' % classes[class_label])
 
 
-def generate_balanced_test(metadata_type):
-    metadata_types = ['image', 'age_approx', 'anatom_site_general', 'lesion_id', 'sex']
+def generate_balanced_test(dataset, task):
+    # metadata_types = ['image', 'age_approx', 'anatom_site_general', 'lesion_id', 'sex']
 
-    org_test = './data/isic2019/isic2019_%s_testing' % metadata_type
-    balanced_test = './data/isic2019/isic2019_%s_testing_balanced' % metadata_type
+    org_test = '../data/%s/%s_testing' % (dataset, task)
+    balanced_test = '../data/%s/%s_testing_balanced' % (dataset, task)
 
     counting = [len(files) for r, d, files in os.walk(org_test)]
     min_class = min(counting[1:])
@@ -90,10 +90,10 @@ def generate_balanced_test(metadata_type):
 
 
 def load_full_data_isic2019():
-    if not os.path.exists('./data/isic2019/isic2019_skin_training_full'):
-        os.makedirs('./data/isic2019/isic2019_skin_training_full')
+    if not os.path.exists('../data/isic2019/skin_training_full'):
+        os.makedirs('../data/isic2019/skin_training_full')
 
-    with open('./data/isic2019/ISIC_2019_Training_GroundTruth.csv', 'r') as gt_in:
+    with open('../data/isic2019/ISIC_2019_Training_GroundTruth.csv', 'r') as gt_in:
         # skip first line
         next(gt_in)
 
@@ -106,10 +106,10 @@ def load_full_data_isic2019():
             class_label = label_list.index(1.0)
 
             # write into new folder
-            if not os.path.exists('./data/isic2019/isic2019_skin_training_full/%s' % classes[class_label]):
-                os.makedirs('./data/isic2019/isic2019_skin_training_full/%s' % classes[class_label])
+            if not os.path.exists('../data/isic2019/skin_training_full/%s' % classes[class_label]):
+                os.makedirs('../data/isic2019/skin_training_full/%s' % classes[class_label])
 
-            shutil.move('./data/isic2019/ISIC_2019_Training_Input/%s.jpg' % img_file, './data/isic2019/isic2019_skin_training_full/%s' % classes[class_label])
+            shutil.move('../data/isic2019/ISIC_2019_Training_Input/%s.jpg' % img_file, '../data/isic2019/skin_training_full/%s' % classes[class_label])
 
 
 def generate_test_gt_csv(data_path):
@@ -134,9 +134,10 @@ def generate_test_gt_csv(data_path):
                 filewriter.writerow([img_file] + class_binary.tolist())
 
 
-def get_data_statistics(data_path):
-    """compute image data statistics (mean, std)"""
+def get_data_statistics(dataset, task):
+    data_path = '../data/%s/%s_training' % (dataset, task)
 
+    """compute image data statistics (mean, std)"""
     data_transform = transforms.Compose([transforms.RandomResizedCrop(224),
                                          transforms.ToTensor()])
 
@@ -181,12 +182,12 @@ def five_fold_split_isic2019_meta(metadata_type):
     metadata_types = ['image', 'age_approx', 'anatom_site_general', 'lesion_id', 'sex']
     metadata_type_idx = metadata_types.index(metadata_type)
 
-    if not os.path.exists('./data/isic2019/isic2019_%s_training' % metadata_type):
-        os.makedirs('./data/isic2019/isic2019_%s_training' % metadata_type)
-    if not os.path.exists('./data/isic2019/isic2019_%s_testing' % metadata_type):
-        os.makedirs('./data/isic2019/isic2019_%s_testing' % metadata_type)
+    if not os.path.exists('../data/isic2019/%s_training' % metadata_type):
+        os.makedirs('../data/isic2019/%s_training' % metadata_type)
+    if not os.path.exists('../data/isic2019/%s_testing' % metadata_type):
+        os.makedirs('../data/isic2019/%s_testing' % metadata_type)
 
-    with open('./data/isic2019/ISIC_2019_Training_Metadata.csv', 'r') as gt_in:
+    with open('../data/isic2019/ISIC_2019_Training_Metadata.csv', 'r') as gt_in:
         # skip first line
         next(gt_in)
 
@@ -200,26 +201,26 @@ def five_fold_split_isic2019_meta(metadata_type):
                 class_name = info[metadata_type_idx].replace(' ', '_')
 
                 if p >= 0.2:
-                    if not os.path.exists('./data/isic2019/isic2019_%s_training/%s' % (metadata_type, class_name)):
-                        os.makedirs('./data/isic2019/isic2019_%s_training/%s' % (metadata_type, class_name))
+                    if not os.path.exists('../data/isic2019/%s_training/%s' % (metadata_type, class_name)):
+                        os.makedirs('../data/isic2019/%s_training/%s' % (metadata_type, class_name))
 
-                    shutil.move('./data/isic2019/ISIC_2019_Training_Input/%s.jpg' % info[0], './data/isic2019/isic2019_%s_training/%s' % (metadata_type, class_name))
+                    shutil.move('../data/isic2019/ISIC_2019_Training_Input/%s.jpg' % info[0], '../data/isic2019/%s_training/%s' % (metadata_type, class_name))
 
                 else:
-                    if not os.path.exists('./data/isic2019/isic2019_%s_testing/%s' % (metadata_type, class_name)):
-                        os.makedirs('./data/isic2019/isic2019_%s_testing/%s' % (metadata_type, class_name))
+                    if not os.path.exists('../data/isic2019/%s_testing/%s' % (metadata_type, class_name)):
+                        os.makedirs('../data/isic2019/%s_testing/%s' % (metadata_type, class_name))
 
-                    shutil.move('./data/isic2019/ISIC_2019_Training_Input/%s.jpg' % info[0], './data/isic2019/isic2019_%s_testing/%s' % (metadata_type, class_name))
+                    shutil.move('../data/isic2019/ISIC_2019_Training_Input/%s.jpg' % info[0], '../data/isic2019/%s_testing/%s' % (metadata_type, class_name))
 
 
 def load_full_data_isic2019_meta(metadata_type):
     metadata_types = ['image', 'age_approx', 'anatom_site_general', 'lesion_id', 'sex']
     metadata_type_idx = metadata_types.index(metadata_type)
 
-    if not os.path.exists('./data/isic2019/isic2019_%s_training_full' % metadata_type):
-        os.makedirs('./data/isic2019/isic2019_%s_training_full' % metadata_type)
+    if not os.path.exists('../data/isic2019/%s_training_full' % metadata_type):
+        os.makedirs('../data/isic2019/%s_training_full' % metadata_type)
 
-    with open('./data/isic2019/ISIC_2019_Training_Metadata.csv', 'r') as gt_in:
+    with open('../data/isic2019/ISIC_2019_Training_Metadata.csv', 'r') as gt_in:
         # skip first line
         next(gt_in)
 
@@ -232,14 +233,14 @@ def load_full_data_isic2019_meta(metadata_type):
 
                 class_name = info[metadata_type_idx].replace(' ', '_')
 
-                if not os.path.exists('./data/isic2019/isic2019_%s_training_full/%s' % (metadata_type, class_name)):
-                    os.makedirs('./data/isic2019/isic2019_%s_training_full/%s' % (metadata_type, class_name))
+                if not os.path.exists('../data/isic2019/%s_training_full/%s' % (metadata_type, class_name)):
+                    os.makedirs('../data/isic2019/%s_training_full/%s' % (metadata_type, class_name))
 
-                shutil.move('./data/isic2019/ISIC_2019_Training_Input/%s.jpg' % info[0], './data/isic2019/isic2019_%s_training_full/%s' % (metadata_type, class_name))
+                shutil.move('../data/isic2019/ISIC_2019_Training_Input/%s.jpg' % info[0], '../data/isic2019/%s_training_full/%s' % (metadata_type, class_name))
 
 
 def data_cropping():
-    test_dir = 'data/isic2019/isic2019_skin_testing_full/UNKNOWN'
+    test_dir = 'data/isic2019/skin_testing_full/UNKNOWN'
 
     for image_file in os.listdir(test_dir):
         print('Processing image %s...' % image_file)
@@ -262,43 +263,47 @@ def data_cropping():
             cv2.imwrite('%s/%s' % (save_dir, image_name), croppted_image)
 
 
-if __name__ == "__main__":
-    task_options = ['skin', 'meta', 'data_statistics']
+# get_data_statistics('fashioniq2019', 'color')
+generate_balanced_test('fashioniq2019', 'color')
 
-    parser = argparse.ArgumentParser(description='data processing')
-    parser.add_argument('--task', default='skin', choices=task_options)
-    args = parser.parse_args()
 
-    if args.task == 'skin':
-        if not os.path.exists('./data/isic2019'):
-            os.makedirs('./data/isic2019')
-
-        five_fold_split_isic2019()
-        generate_test_gt_csv('./data/isic2019/isic2019_skin_testing')
-
-        generate_balanced_test('skin')
-        generate_test_gt_csv('./data/isic2019/isic2019_skin_testing_balanced')
-
-        load_full_data_isic2019()
-
-    elif args.task == 'meta':
-        five_fold_split_isic2019_meta('age_approx')
-        five_fold_split_isic2019_meta('anatom_site_general')
-        five_fold_split_isic2019_meta('sex')
-
-        generate_balanced_test('age_approx')
-        generate_balanced_test('anatom_site_general')
-        generate_balanced_test('sex')
-
-        load_full_data_isic2019_meta('age_approx')
-        load_full_data_isic2019_meta('anatom_site_general')
-        load_full_data_isic2019_meta('sex')
-
-    elif args.task == 'data_statistics':
-        if not os.path.exists('./data/isic2019/isic2019_skin_training_full'):
-            raise RuntimeError('Please process data first by running --task=skin')
-
-        get_data_statistics('./data/isic2019/isic2019_skin_training_full')
-
-    else:
-        RuntimeError('Wrong input')
+# if __name__ == "__main__":
+#     task_options = ['skin', 'meta', 'data_statistics']
+#
+#     parser = argparse.ArgumentParser(description='data processing')
+#     parser.add_argument('--task', default='skin', choices=task_options)
+#     args = parser.parse_args()
+#
+#     if args.task == 'skin':
+#         if not os.path.exists('../data/isic2019'):
+#             os.makedirs('../data/isic2019')
+#
+#         five_fold_split_isic2019()
+#         generate_test_gt_csv('../data/isic2019/skin_testing')
+#
+#         generate_balanced_test('skin')
+#         generate_test_gt_csv('../data/isic2019/skin_testing_balanced')
+#
+#         load_full_data_isic2019()
+#
+#     elif args.task == 'meta':
+#         five_fold_split_isic2019_meta('age_approx')
+#         five_fold_split_isic2019_meta('anatom_site_general')
+#         five_fold_split_isic2019_meta('sex')
+#
+#         generate_balanced_test('age_approx')
+#         generate_balanced_test('anatom_site_general')
+#         generate_balanced_test('sex')
+#
+#         load_full_data_isic2019_meta('age_approx')
+#         load_full_data_isic2019_meta('anatom_site_general')
+#         load_full_data_isic2019_meta('sex')
+#
+#     elif args.task == 'data_statistics':
+#         if not os.path.exists('../data/isic2019/skin_training_full'):
+#             raise RuntimeError('Please process data first by running --task=skin')
+#
+#         get_data_statistics('../data/isic2019/skin_training_full')
+#
+#     else:
+#         RuntimeError('Wrong input')
