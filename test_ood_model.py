@@ -10,6 +10,7 @@
 # without the express permission of yilin.shen
 # ==================================================
 
+import os
 import numpy as np
 import csv
 import datetime
@@ -21,12 +22,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
-from utils.ood_metrics import cal_metrics
+from torchvision.utils import save_image
+
+from utils.ood_metrics import cal_ood_metrics
+from utils.utils_dataloader import Denormalize
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+denorm = Denormalize(mean=[0.6796547, 0.5259538, 0.51874095], std=[0.18123391, 0.18504128, 0.19822954])
 
-def test_with_ood(cnn, model, test_loader, ood_loader, classes, ood_method='odin', generate_result=False, validation=True):
+
+def save_images_batch(_images, _paths, meta_task):
+
+    for image, path in zip(_images, _paths):
+        new_file = path.replace(meta_task, meta_task + '_enhanced')
+
+        # create dir if not existing
+        if not os.path.exists(os.path.dirname(new_file)):
+            os.makedirs(os.path.dirname(new_file))
+
+        save_image(image, new_file)
+
+
+def test_with_ood(cnn, task, test_loader, ood_loader, classes, ood_method='odin', generate_result=False, validation=True):
     """test function for IND and base OOD (OOD without base model retraining)"""
 
     # create file and input first row
@@ -70,6 +88,35 @@ def test_with_ood(cnn, model, test_loader, ood_loader, classes, ood_method='odin
                 pred_conf, pred = torch.max(pred.data, 1)
                 all_pred_conf.extend(pred_conf.cpu().detach().numpy())
 
+            elif ood_method == 'perturbation':
+                # model inference
+                pred = cnn(images)
+
+                # T = 1000
+                # pred = pred / T
+
+                # input preprocessing
+                xent = nn.CrossEntropyLoss()
+                loss = xent(pred, labels)
+                loss.backward()
+
+                images = images - 0.005 * torch.sign(images.grad)
+
+                # save the enhanced image
+                if task != 'skin' and len(data) == 3:
+                    save_images_batch(denorm(images).to("cpu").clone().detach(), paths, task)
+
+                pred = cnn(images)
+                pred = F.softmax(pred, dim=-1)
+
+                # get full probability distribution
+                full_prob_batch = pred.cpu().detach().numpy()
+                all_full_prob.extend(full_prob_batch)
+
+                # get conf score
+                pred_conf, pred = torch.max(pred.data, 1)
+                all_pred_conf.extend(pred_conf.cpu().detach().numpy())
+
             elif ood_method == 'odin':
                 # model inference
                 pred = cnn(images)
@@ -96,16 +143,16 @@ def test_with_ood(cnn, model, test_loader, ood_loader, classes, ood_method='odin
                 all_pred_conf.extend(pred_conf.cpu().detach().numpy())
 
             elif ood_method == 'cosine':
-                # model inference
-                pred, cos_sim = cnn(images)
-                pred_labels = torch.argmax(pred, 1)
-
-                # input preprocessing
-                xent = nn.CrossEntropyLoss()
-                loss = xent(pred, pred_labels)
-                loss.backward()
-
-                images = images - 0.005 * torch.sign(images.grad)
+                # # model inference
+                # pred, cos_sim = cnn(images)
+                # pred_labels = torch.argmax(pred, 1)
+                #
+                # # input preprocessing
+                # xent = nn.CrossEntropyLoss()
+                # loss = xent(pred, pred_labels)
+                # loss.backward()
+                #
+                # images = images - 0.005 * torch.sign(images.grad)
 
                 # re-calculate pred on processed input
                 pred, cos_sim = cnn(images)
@@ -144,13 +191,16 @@ def test_with_ood(cnn, model, test_loader, ood_loader, classes, ood_method='odin
     test_acc = np.mean(correct)
     print("test_acc: %.4f" % test_acc)
 
+    # get IND multiclass auc score
+    # ToDo
+
     """OOD testing"""
     if ood_method == 'cosine':
         _, ood_labels, _, _, _, ood_pred_conf = get_pred_conf(ood_loader)
     else:
         ood_pred_conf, ood_labels, _, _, _, _ = get_pred_conf(ood_loader)
 
-    fnr, threshold, detection_error, best_threshold, auroc, aupr_in, aupr_out, out_mea_mean = cal_metrics(ind_pred_conf, ood_pred_conf)
+    fnr, threshold, detection_error, best_threshold, auroc, aupr_in, aupr_out, out_mea_mean = cal_ood_metrics(ind_pred_conf, ood_pred_conf)
 
     # generate challenge results
     if generate_result:
@@ -177,3 +227,14 @@ def test_with_ood(cnn, model, test_loader, ood_loader, classes, ood_method='odin
                     filewriter.writerow([image_name] + list(_full_prob) + [0.4])
 
     # return test_acc, fnr, detection_error, auroc, aupr_in, aupr_out, out_mea_mean
+
+    # ToDo
+    # # write wrong prediction into csv file for error analysis
+    # if args.error_analysis:
+    #     error_indices = np.where(np.array(correct_batch) == 0)[0]
+    #
+    #     labels_list = labels.tolist()
+    #     pred_list = pred.tolist()
+    #     with open('logs/%s.error' % filename, 'a') as error_out:
+    #         for error_idx in error_indices:
+    #             error_out.write('%s,%d,%d\n' % (paths[error_idx], labels_list[error_idx], pred_list[error_idx]))

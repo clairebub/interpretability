@@ -28,10 +28,15 @@ from torch.autograd import Variable
 from torch.optim.lr_scheduler import MultiStepLR
 from torchvision import models, datasets, transforms
 
+# from data_processing import get_data_statistics
 from utils import utils_dataloader
 from utils import resource_allocation
-from models import cosine_net, ensemble_resnets
-from test_ood_base_model import test_with_ood
+from utils import optimizer
+
+from models import cosine_net, ensemble_resnets, ensemble_cosine_resnets
+
+from utils.ind_metrics import cal_ind_metrics
+from test_ood_model import test_with_ood
 
 """input arguments"""
 task_options = ['skin', 'age_approx', 'anatom_site_general', 'sex']
@@ -45,9 +50,12 @@ parser = argparse.ArgumentParser(description='train_model')
 parser.add_argument('--gpu_no', type=int, default=4)
 parser.add_argument('--task', default='skin', choices=task_options)
 parser.add_argument('--dataset', default='isic2019')
-parser.add_argument('--ood_dataset', default='cifar10', choices=ood_dataset)
-parser.add_argument('--model', default='resnet34', choices=model_options)
+# parser.add_argument('--dataset', default='fashioniq2019')
+parser.add_argument('--ood_dataset', default='isic', choices=ood_dataset)
+parser.add_argument('--model', default='resnet101', choices=model_options)
 parser.add_argument('--model_customize', default='base', choices=model_customize_options)
+# parser.add_argument('--model_customize', default='cosine', choices=model_customize_options)
+parser.add_argument('--meta', type=bool, default=False)
 parser.add_argument('--ood_method', default='odin', choices=ood_options)
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--epochs', type=int, default=500)
@@ -56,7 +64,7 @@ parser.add_argument('--optim', default='SGD', choices=optim_options)
 parser.add_argument('--learning_rate', type=float, default=0.001)
 parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
 parser.add_argument('--train_augmentation', type=bool, default=False, help='augment train data by color')
-parser.add_argument('--test', type=bool, default=False)
+parser.add_argument('--test', type=bool, default=True)
 parser.add_argument('--test_augmentation', type=bool, default=False, help='augment test data by five crop')
 parser.add_argument('--error_analysis', type=bool, default=False)
 parser.add_argument('--generate_result', type=bool, default=False)
@@ -100,29 +108,26 @@ filename = args.dataset + '_' \
            + ('ft' if args.pretrained else '') \
            + ('' if args.validation else '_full')
 
-# initialize log file
-if not os.path.exists('logs/' + folder_name):
-    os.makedirs('logs/' + folder_name)
-
-logging.basicConfig(filename='logs/%s/%s.log' % (folder_name, filename), level=logging.DEBUG)
-
 # initialize tensorboard writer
-tensorboard_path = 'logs/%s/%s' % (folder_name, filename)
+tensorboard_path = 'logs/%s/%s/%s' % (args.dataset, folder_name, filename)
 if not os.path.exists(tensorboard_path):
     os.makedirs(tensorboard_path)
 tb_writer = SummaryWriter(tensorboard_path)
 
+# initialize log file
+logging.basicConfig(filename='logs/%s/%s/%s.log' % (args.dataset, folder_name, filename), level=logging.DEBUG)
 
 """data loading"""
 
 # # normalization for imagenet
 # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-# # normalization for isic2019 test data
-# normalize = transforms.Normalize(mean=[0.6805612, 0.5264354, 0.5190888], std=[0.20700188, 0.19518976, 0.20581853])
-
 # normalization for isic2019
 normalize = transforms.Normalize(mean=[0.6796547, 0.5259538, 0.51874095], std=[0.18123391, 0.18504128, 0.19822954])
+
+# general data normalization
+# mean, std, _ = get_data_statistics(args.dataset, args.task)
+# normalize = transforms.Normalize(mean=mean, std=std)
 
 # load training data
 if args.train_augmentation:
@@ -141,39 +146,38 @@ else:
                                           transforms.ToTensor(),
                                           normalize])
 
-# isic2019_train_data = datasets.ImageFolder(root='data/isic2019/isic2019_training', transform=data_transform)
-# isic2019_test_data = datasets.ImageFolder(root='data/isic2019/isic2019_testing', transform=data_transform)
+train_data = utils_dataloader.ImageFolderWithPaths(root='data/%s/%s_training%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=train_transform)
 
-isic2019_train_data = utils_dataloader.ImageFolderWithPaths(root='data/isic2019/isic2019_%s_training%s' % (args.task, '' if args.validation else '_full'), transform=train_transform)
-
-train_loader = torch.utils.data.DataLoader(dataset=isic2019_train_data,
+train_loader = torch.utils.data.DataLoader(dataset=train_data,
                                            batch_size=args.batch_size,
                                            shuffle=True,
                                            num_workers=16)
 
-classes = isic2019_train_data.classes
-num_classes = len(isic2019_train_data.classes)
+classes = train_data.classes
+num_classes = len(train_data.classes)
 
 # load testing data
 test_transform = transforms.Compose([transforms.Resize(size=(224, 224)),
                                      transforms.ToTensor(),
                                      normalize])
 
-isic2019_test_data = utils_dataloader.ImageFolderWithPaths(root='data/isic2019/isic2019_%s_testing%s' % (args.task, '' if args.validation else '_full'), transform=test_transform)
-test_loader = torch.utils.data.DataLoader(dataset=isic2019_test_data,
+test_data = utils_dataloader.ImageFolderWithPaths(root='data/%s/%s_testing%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=test_transform)
+test_loader = torch.utils.data.DataLoader(dataset=test_data,
                                           batch_size=args.batch_size,
                                           shuffle=False,
                                           num_workers=16)
 
 if args.validation:
-    isic2019_test_data_balanced = utils_dataloader.ImageFolderWithPaths(root='data/isic2019/isic2019_%s_testing_balanced' % args.task, transform=test_transform)
-    test_balanced_loader = torch.utils.data.DataLoader(dataset=isic2019_test_data_balanced,
+    test_data_balanced = utils_dataloader.ImageFolderWithPaths(root='data/%s/%s_testing_balanced' % (args.dataset, args.task), transform=test_transform)
+    test_balanced_loader = torch.utils.data.DataLoader(dataset=test_data_balanced,
                                                        batch_size=args.batch_size,
                                                        shuffle=False,
                                                        num_workers=16)
 
 # load ood data
-if args.ood_dataset == 'tinyImageNet_resize':
+if args.ood_dataset == 'isic':
+    ood_dataset = datasets.ImageFolder(root='data/ood/isic', transform=test_transform)
+elif args.ood_dataset == 'tinyImageNet_resize':
     ood_dataset = datasets.ImageFolder(root='data/ood/TinyImagenet_resize', transform=test_transform)
 elif args.ood_dataset == 'LSUN_resize':
     ood_dataset = datasets.ImageFolder(root='data/ood/LSUN_resize', transform=test_transform)
@@ -184,7 +188,7 @@ elif args.ood_dataset == 'cifar10':
 elif args.ood_dataset == 'cifar100':
     ood_dataset = datasets.CIFAR100(root='data/ood/', train=False, transform=test_transform, download=False)
 elif args.ood_dataset == 'svhn':
-    ood_dataset = datasets.SVHN(root='data/ood/svhn', split='train', transform=test_transform, download=False)
+    ood_dataset = datasets.SVHN(root='data/ood/svhn', split='test', transform=test_transform, download=False)
 else:
     raise RuntimeError('OOD dataset not available')
 
@@ -205,31 +209,42 @@ elif 'ensemble' in args.model_customize:
 
     # print('Loading pretrained resnet50 model...')
     # cnn_resnet50 = nn.DataParallel(ml.resnet50(pretrained=args.pretrained))
-    # cnn_resnet50.load_state_dict(torch.load('checkpoints/base_skin/isic2019_skin_noaug_base_resnet50_256_ft_full.pt'))
+    # cnn_resnet50.load_state_dict(torch.load('checkpoints/isic2019/base_skin/isic2019_skin_noaug_base_resnet50_256_ft_full.pt'))
+
+    # print('Loading pretrained resnet101 model...')
+    # cnn_resnet101 = nn.DataParallel(ml.resnet101(pretrained=args.pretrained))
+    # cnn_resnet101.load_state_dict(torch.load('checkpoints/isic2019/base_skin/isic2019_skin_noaug_base_resnet101_256_ft_full.pt'))
+    #
+    # print('Loading pretrained resnet152 model...')
+    # cnn_resnet152 = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
+    # cnn_resnet152.load_state_dict(torch.load('checkpoints/isic2019/base_skin/isic2019_skin_noaug_base_resnet152_256_ft_full.pt'))
+
+    print('Loading pretrained resnet34 model...')
+    cnn_resnet34 = nn.DataParallel(cosine_net.CosineNet(ml.resnet34(pretrained=args.pretrained), num_classes))
+    cnn_resnet34.load_state_dict(torch.load('checkpoints/isic2019/cosine_skin/isic2019_skin_noaug_cosine_resnet34_256_ft.pt'))
 
     print('Loading pretrained resnet101 model...')
-    cnn_resnet101 = nn.DataParallel(ml.resnet101(pretrained=args.pretrained))
-    cnn_resnet101.load_state_dict(torch.load('checkpoints/base_skin/isic2019_skin_noaug_base_resnet101_256_ft_full.pt'))
+    cnn_resnet101 = nn.DataParallel(cosine_net.CosineNet(ml.resnet101(pretrained=args.pretrained), num_classes))
+    cnn_resnet101.load_state_dict(torch.load('checkpoints/isic2019/cosine_skin/isic2019_skin_noaug_cosine_resnet101_256_ft.pt'))
 
-    print('Loading pretrained resnet152 model...')
-    cnn_resnet152 = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
-    cnn_resnet152.load_state_dict(torch.load('checkpoints/base_skin/isic2019_skin_noaug_base_resnet152_256_ft_full.pt'))
-
-    if 'meta' not in args.model_customize:
-        cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet101, cnn_resnet152], num_classes)
+    if not args.meta:
+        if 'cosine' in args.model_customize:
+            cnn = ensemble_cosine_resnets.CosineResnetEnsemble([cnn_resnet34, cnn_resnet101], num_classes)
+        else:
+            cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet34, cnn_resnet101], num_classes)
     else:
         # load meta data pretrained models
         print('Loading pretrained age_approx resnet152 model...')
         cnn_age_approx = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
-        cnn_age_approx.load_state_dict(torch.load('checkpoints/base_age_approx/isic2019_age_approx_noaug_base_resnet152_256_ft_full.pt'))
+        cnn_age_approx.load_state_dict(torch.load('checkpoints/base_age_approx/age_approx_noaug_base_resnet152_256_ft_full.pt'))
 
         print('Loading pretrained anatom_site_general resnet152 model...')
         cnn_anatom_site_general = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
-        cnn_anatom_site_general.load_state_dict(torch.load('checkpoints/base_anatom_site_general/isic2019_anatom_site_general_noaug_base_resnet152_256_ft_full.pt'))
+        cnn_anatom_site_general.load_state_dict(torch.load('checkpoints/base_anatom_site_general/anatom_site_general_noaug_base_resnet152_256_ft_full.pt'))
 
         print('Loading pretrained sex resnet152 model...')
         cnn_sex = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
-        cnn_sex.load_state_dict(torch.load('checkpoints/base_sex/isic2019_sex_noaug_base_resnet152_256_ft_full.pt'))
+        cnn_sex.load_state_dict(torch.load('checkpoints/base_sex/sex_noaug_base_resnet152_256_ft_full.pt'))
 
         cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet101, cnn_resnet152, cnn_age_approx, cnn_anatom_site_general, cnn_sex], num_classes)
 else:
@@ -242,17 +257,17 @@ cnn = nn.DataParallel(cnn)
 if not os.path.exists('checkpoints'):
     os.makedirs('checkpoints')
 
-model_file = 'checkpoints/%s/%s.pt' % (folder_name, filename)
+model_file = 'checkpoints/%s/%s/%s.pt' % (args.dataset, folder_name, filename)
 if os.path.isfile(model_file):
     pretrained_dict = torch.load(model_file)
     cnn.load_state_dict(pretrained_dict)
     print("Reloading model from {}".format(model_file))
 else:
-    if not os.path.exists('checkpoints/' + folder_name):
-        os.makedirs('checkpoints/' + folder_name)
-
     if args.test:
         raise RuntimeError('model not trained')
+    else:
+        if not os.path.exists('checkpoints/%s/%s' % (args.dataset, folder_name)):
+            os.makedirs('checkpoints/%s/%s' % (args.dataset, folder_name))
 
 
 def test(data_loader):
@@ -261,43 +276,34 @@ def test(data_loader):
     # change model to 'eval' mode (BN uses moving mean/var)
     cnn.eval()
 
-    correct = []
-    probability = []
-    errors = []
+    predictions = []
+    labels = []
 
-    for images, labels, paths in data_loader:
-        images = Variable(images).to(device)
-        labels = Variable(labels).to(device)
+    for image_batch, label_batch, path_batch in data_loader:
+
+        image_batch = Variable(image_batch).to(device)
+        label_batch = Variable(label_batch).to(device)
 
         cnn.to(device)
         cnn.zero_grad()
 
-        pred = cnn(images)
+        if 'cosine' in args.model_customize:
+            pred, _ = cnn(image_batch)
+        else:
+            pred = cnn(image_batch)
+
         pred = F.softmax(pred, dim=-1)
         full_prob_batch = pred.cpu().detach().numpy()
 
         pred_value, pred = torch.max(pred.data, 1)
 
-        # append into result list
-        correct_batch = (pred == labels).cpu().numpy()
-        correct.extend(correct_batch)
-        prob_batch = pred_value.cpu().numpy()
-        probability.extend(prob_batch)
+        # append into predictions and labels
+        predictions.extend(pred.cpu().numpy())
+        labels.extend(label_batch.cpu().numpy())
 
-        # write wrong prediction into csv file for error analysis
-        if args.error_analysis:
-            error_indices = np.where(np.array(correct_batch) == 0)[0]
+    test_acc, test_auc = cal_ind_metrics(predictions, labels)
 
-            labels_list = labels.tolist()
-            pred_list = pred.tolist()
-            with open('logs/%s.error' % filename, 'a') as error_out:
-                for error_idx in error_indices:
-                    error_out.write('%s,%d,%d\n' % (paths[error_idx], labels_list[error_idx], pred_list[error_idx]))
-
-    correct = np.array(correct).astype(bool)
-    test_acc = np.mean(correct)
-
-    return test_acc
+    return test_acc, test_auc
 
 
 def train():
@@ -308,7 +314,12 @@ def train():
 
     # define optimizer
 
-    if args.optim == 'SGD':
+    if 'cosine' in args.model_customize:
+        optim = 'SGDNoWeightDecayLast'
+    else:
+        optim = args.optim
+
+    if optim == 'SGD':
         if args.model.startswith('densenet'):
             cnn_optimizer = torch.optim.SGD(cnn.parameters(), lr=args.learning_rate, momentum=0.9, nesterov=True, weight_decay=1e-4)
             # scheduler = MultiStepLR(cnn_optimizer, milestones=[150, 225], gamma=0.1)
@@ -318,6 +329,9 @@ def train():
             scheduler = MultiStepLR(cnn_optimizer, milestones=[60, 120, 160], gamma=0.2)
     # elif args.optim == 'Adam':
     #     cnn_optimizer = torch.optim.Adam(cnn.parameters(), lr=args.learning_rate, betas=(args.beta1, 0.999))
+    elif optim == 'SGDNoWeightDecayLast':
+        cnn_optimizer = optimizer.SGDNoWeightDecayLast(cnn.parameters(), lr=args.learning_rate, momentum=0.9, nesterov=True, weight_decay=5e-4)
+        scheduler = MultiStepLR(cnn_optimizer, milestones=[60, 120, 160], gamma=0.2)
     else:
         raise RuntimeError('optimizer not supported')
 
@@ -339,7 +353,10 @@ def train():
             cnn.to(device)
             cnn.zero_grad()
 
-            pred_original = cnn(images)
+            if 'cosine' in args.model_customize:
+                pred_original, _ = cnn(images)
+            else:
+                pred_original = cnn(images)
 
             pred_original = torch.softmax(pred_original, dim=-1)
 
@@ -372,16 +389,19 @@ def train():
 
         if args.validation:
             # test after each epoch
-            test_acc = test(test_loader)
-            test_balanced_acc = test(test_balanced_loader)
+            test_acc, test_auc = test(test_loader)
 
             # output accuracy results
-            tqdm.write('test_acc: %.4f' % test_acc)
-            tqdm.write('test_balanced_acc: %.4f' % test_balanced_acc)
+            tqdm.write('test_acc: %.4f,   test_auc: %.4f' % (test_acc, test_auc))
 
             # write log for tensorboard
             tb_writer.add_scalar('Test_Accuracy', test_acc, epoch)
+            tb_writer.add_scalar('Test_AUC', test_auc, epoch)
+
+            test_balanced_acc, test_balanced_auc = test(test_balanced_loader)
+            tqdm.write('test_balanced_acc: %.4f,   test_balanced_auc: %.4f' % (test_balanced_acc, test_balanced_auc))
             tb_writer.add_scalar('Test_Balanced_Accuracy', test_balanced_acc, epoch)
+            tb_writer.add_scalar('Test_Balanced_AUC', test_balanced_auc, epoch)
 
             # add into log file
             row = {'epoch': str(epoch), 'loss': str(xentropy_loss_avg), 'train_acc': str(train_acc), 'test_acc': str(test_acc), 'test_balanced_acc': str(test_balanced_acc)}
@@ -395,21 +415,21 @@ def train():
         logging.info(row)
 
         # save model
-        torch.save(cnn.state_dict(), 'checkpoints/%s/%s.pt' % (folder_name, filename))
+        torch.save(cnn.state_dict(), 'checkpoints/%s/%s/%s.pt' % (args.dataset, folder_name, filename))
 
 
 if args.test:
-    if args.model_customize == 'cosine':
+    if 'cosine' in args.model_customize:
         ood_method = 'cosine'
     else:
         ood_method = args.ood_method
 
     print("Testing on original test data...")
-    test_with_ood(cnn, filename, test_loader, ood_loader, classes, ood_method=ood_method, generate_result=args.generate_result, validation=args.validation)
+    test_with_ood(cnn, args.task, test_loader, ood_loader, classes, ood_method=ood_method, generate_result=args.generate_result, validation=args.validation)
 
     if args.validation:
         print("\nTesting on balanced test data...")
-        test_with_ood(cnn, filename, test_balanced_loader, ood_loader, classes, ood_method=ood_method, generate_result=args.generate_result, validation=args.validation)
+        test_with_ood(cnn, args.task, test_balanced_loader, ood_loader, classes, ood_method=ood_method, generate_result=args.generate_result, validation=args.validation)
 
 else:
     train()

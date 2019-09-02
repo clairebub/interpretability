@@ -17,7 +17,7 @@ def fpr95_approx(ind_confidences, ood_confidences):
 
 
 def fpr95(ind_confidences, ood_confidences):
-    """calculate the falsepositive error when tpr is 95%"""
+    """calculate the false positive error when tpr is 95%"""
 
     Y1 = ood_confidences
     X1 = ind_confidences
@@ -83,7 +83,7 @@ def detection(ind_confidences, ood_confidences, n_iter=100000, return_data=False
         return best_error, best_delta
 
 
-def cal_metrics(measure_in, measure_out):
+def cal_ood_metrics(measure_in, measure_out):
     """calculate OOD evaluation metrics"""
 
     # FNR@TPR95
@@ -97,8 +97,7 @@ def cal_metrics(measure_in, measure_out):
     print("Detection best threshold:", best_threshold)
 
     # create_ood_lbl
-    all_mea = [np.ones_like(measure_in), np.zeros_like(measure_out)]
-    in_out_lbl = np.concatenate(all_mea, axis=0)
+    in_out_lbl = np.concatenate([np.ones_like(measure_in), np.zeros_like(measure_out)], axis=0)
     # create measure_all
     measure_all = np.concatenate([measure_in, measure_out])
 
