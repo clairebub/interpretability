@@ -26,37 +26,36 @@ import torch.backends.cudnn as cudnn
 import torchvision.models as ml
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import MultiStepLR
-from torchvision import models, datasets, transforms
+from torchvision import datasets, transforms
 
 # from data_processing import get_data_statistics
 from utils import utils_dataloader
 from utils import resource_allocation
 from utils import optimizer
 
-from models import cosine_net, ensemble_resnets, ensemble_cosine_resnets
+from models import cosine_net, ensemble_resnets, ensemble_cosine_resnets, resnet, cosine_resnet
 
 from utils.ind_metrics import cal_ind_metrics
-from test_ood_model import test_with_ood
+from inference import test_ind, test_ood
 
 """input arguments"""
+dataset_options = ['isic2019', 'fashioniq2019']
 task_options = ['skin', 'age_approx', 'anatom_site_general', 'sex']
 model_options = ['densenet121', 'densenet161', 'densenet169', 'densenet201', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'resnext101_32x8d', 'vgg13', 'vgg16']
-model_customize_options = ['base', 'cosine', 'ensemble']
+model_customize_options = ['base', 'cosine', 'ensemble', 'ensemble_cosine']
 optim_options = ['SGD', 'Adam', 'RMSprop']
 ood_dataset = ['tinyImageNet_resize', 'LSUN_resize', 'iSUN', 'cifar10', 'cifar100', 'svhn']
-ood_options = ['base', 'odin', 'cosine']
+ood_options = ['Mahalanobis', 'Mahalanobis_IPP', 'DeepMahalanobis', 'DeepMahalanobis_IPP']
+# ood_options = ['Baseline', 'ODIN', 'Mahalanobis', 'Mahalanobis_IPP', 'DeepMahalanobis', 'DeepMahalanobis_IPP']
 
 parser = argparse.ArgumentParser(description='train_model')
+
 parser.add_argument('--gpu_no', type=int, default=4)
 parser.add_argument('--task', default='skin', choices=task_options)
-parser.add_argument('--dataset', default='isic2019')
-# parser.add_argument('--dataset', default='fashioniq2019')
-parser.add_argument('--ood_dataset', default='isic', choices=ood_dataset)
-parser.add_argument('--model', default='resnet101', choices=model_options)
+parser.add_argument('--dataset', default='isic2019', choices=dataset_options)
+parser.add_argument('--model', default='resnet34', choices=model_options)
 parser.add_argument('--model_customize', default='base', choices=model_customize_options)
-# parser.add_argument('--model_customize', default='cosine', choices=model_customize_options)
 parser.add_argument('--meta', type=bool, default=False)
-parser.add_argument('--ood_method', default='odin', choices=ood_options)
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--epochs', type=int, default=500)
 parser.add_argument('--seed', type=int, default=0)
@@ -70,6 +69,10 @@ parser.add_argument('--error_analysis', type=bool, default=False)
 parser.add_argument('--generate_result', type=bool, default=False)
 parser.add_argument('--validation', type=bool, default=True)
 parser.add_argument('--pretrained', type=bool, default=True)
+
+parser.add_argument('--ood_dataset', default='cifar100', choices=ood_dataset)
+parser.add_argument('--ood_method', default='all', choices=ood_options)
+parser.add_argument('--data_perturb_magnitude', nargs="+", type=float, default=[0.01])
 
 # get and show input arguments
 args = parser.parse_args()
@@ -97,6 +100,7 @@ np.random.seed(0)
 torch.cuda.manual_seed(args.seed)
 
 """define a universal filename"""
+# folder_name = args.model_customize + '_' + args.task + '_old'
 folder_name = args.model_customize + '_' + args.task
 
 filename = args.dataset + '_' \
@@ -201,9 +205,15 @@ ood_loader = torch.utils.data.DataLoader(dataset=ood_dataset,
 
 # model architecture selection
 if args.model_customize == 'base':
-    cnn = models.__dict__[args.model](pretrained=args.pretrained)
+    if 'resnet' in args.model:
+        cnn = resnet.__dict__[args.model](pretrained=args.pretrained)
+    else:
+        cnn = ml.__dict__[args.model](pretrained=args.pretrained)
 elif args.model_customize == 'cosine':
-    cnn = cosine_net.CosineNet(models.__dict__[args.model](pretrained=args.pretrained), num_classes)
+    if 'resnet' in args.model:
+        cnn = cosine_resnet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes)
+    else:
+        cnn = cosine_net.CosineNet(ml.__dict__[args.model](pretrained=args.pretrained), num_classes)
 elif 'ensemble' in args.model_customize:
     # add the models to be ensembled
 
@@ -211,27 +221,39 @@ elif 'ensemble' in args.model_customize:
     # cnn_resnet50 = nn.DataParallel(ml.resnet50(pretrained=args.pretrained))
     # cnn_resnet50.load_state_dict(torch.load('checkpoints/isic2019/base_skin/isic2019_skin_noaug_base_resnet50_256_ft_full.pt'))
 
-    # print('Loading pretrained resnet101 model...')
-    # cnn_resnet101 = nn.DataParallel(ml.resnet101(pretrained=args.pretrained))
-    # cnn_resnet101.load_state_dict(torch.load('checkpoints/isic2019/base_skin/isic2019_skin_noaug_base_resnet101_256_ft_full.pt'))
-    #
-    # print('Loading pretrained resnet152 model...')
-    # cnn_resnet152 = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
-    # cnn_resnet152.load_state_dict(torch.load('checkpoints/isic2019/base_skin/isic2019_skin_noaug_base_resnet152_256_ft_full.pt'))
+    if 'cosine' in args.model_customize:
+        # print('Loading pretrained resnet34 model...')
+        # cnn_resnet34 = nn.DataParallel(cosine_net.CosineNet(ml.resnet34(pretrained=args.pretrained), num_classes))
+        # cnn_resnet34.load_state_dict(torch.load('checkpoints/isic2019/cosine_skin/isic2019_skin_noaug_cosine_resnet34_256_ft.pt'))
 
-    print('Loading pretrained resnet34 model...')
-    cnn_resnet34 = nn.DataParallel(cosine_net.CosineNet(ml.resnet34(pretrained=args.pretrained), num_classes))
-    cnn_resnet34.load_state_dict(torch.load('checkpoints/isic2019/cosine_skin/isic2019_skin_noaug_cosine_resnet34_256_ft.pt'))
+        print('Loading pretrained resnet101 model...')
+        cnn_resnet101 = nn.DataParallel(cosine_net.CosineNet(ml.resnet101(pretrained=args.pretrained), num_classes))
+        cnn_resnet101.load_state_dict(torch.load('checkpoints/isic2019/cosine_skin/isic2019_skin_noaug_cosine_resnet101_256_ft.pt'))
 
-    print('Loading pretrained resnet101 model...')
-    cnn_resnet101 = nn.DataParallel(cosine_net.CosineNet(ml.resnet101(pretrained=args.pretrained), num_classes))
-    cnn_resnet101.load_state_dict(torch.load('checkpoints/isic2019/cosine_skin/isic2019_skin_noaug_cosine_resnet101_256_ft.pt'))
+        print('Loading pretrained resnet152 model...')
+        cnn_resnet152 = nn.DataParallel(cosine_net.CosineNet(ml.resnet152(pretrained=args.pretrained), num_classes))
+        cnn_resnet152.load_state_dict(torch.load('checkpoints/isic2019/cosine_skin/isic2019_skin_noaug_cosine_resnet152_256_ft.pt'))
+    
+    else:
+        # print('Loading pretrained resnet34 model...')
+        # cnn_resnet34 = nn.DataParallel(ml.resnet34(pretrained=args.pretrained))
+        # cnn_resnet34.load_state_dict(torch.load('checkpoints/isic2019/base_skin/isic2019_skin_noaug_base_resnet34_256_ft_full.pt'))
+
+        print('Loading pretrained resnet101 model...')
+        cnn_resnet101 = nn.DataParallel(ml.resnet101(pretrained=args.pretrained))
+        cnn_resnet101.load_state_dict(torch.load('checkpoints/isic2019/base_skin/isic2019_skin_noaug_base_resnet101_256_ft_full.pt'))
+
+        print('Loading pretrained resnet152 model...')
+        cnn_resnet152 = nn.DataParallel(ml.resnet152(pretrained=args.pretrained))
+        cnn_resnet152.load_state_dict(torch.load('checkpoints/isic2019/base_skin/isic2019_skin_noaug_base_resnet152_256_ft_full.pt'))
 
     if not args.meta:
         if 'cosine' in args.model_customize:
-            cnn = ensemble_cosine_resnets.CosineResnetEnsemble([cnn_resnet34, cnn_resnet101], num_classes)
+            # cnn = ensemble_cosine_resnets.CosineResnetEnsemble([cnn_resnet34, cnn_resnet101], num_classes)
+            cnn = ensemble_cosine_resnets.CosineResnetEnsemble([cnn_resnet101, cnn_resnet152], num_classes)
         else:
-            cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet34, cnn_resnet101], num_classes)
+            # cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet101, cnn_resnet34], num_classes)
+            cnn = ensemble_resnets.ResnetEnsemble([cnn_resnet101, cnn_resnet152], num_classes)
     else:
         # load meta data pretrained models
         print('Loading pretrained age_approx resnet152 model...')
@@ -279,7 +301,8 @@ def test(data_loader):
     predictions = []
     labels = []
 
-    for image_batch, label_batch, path_batch in data_loader:
+    # for image_batch, label_batch, path_batch in data_loader:
+    for image_batch, label_batch in data_loader:
 
         image_batch = Variable(image_batch).to(device)
         label_batch = Variable(label_batch).to(device)
@@ -288,7 +311,7 @@ def test(data_loader):
         cnn.zero_grad()
 
         if 'cosine' in args.model_customize:
-            pred, _ = cnn(image_batch)
+            pred, _, _ = cnn(image_batch)
         else:
             pred = cnn(image_batch)
 
@@ -335,6 +358,9 @@ def train():
     else:
         raise RuntimeError('optimizer not supported')
 
+    if 'ensemble' in args.model_customize:
+        scheduler = MultiStepLR(cnn_optimizer, milestones=[20, 40, 60, 80, 100], gamma=0.2)
+
     # start training
     for epoch in range(args.epochs):
 
@@ -344,7 +370,8 @@ def train():
         train_acc = 0.
 
         progress_bar = tqdm(train_loader)
-        for i, (images, labels, paths) in enumerate(progress_bar):
+        # for i, (images, labels, paths) in enumerate(progress_bar):
+        for i, (images, labels) in enumerate(progress_bar):
             progress_bar.set_description('Epoch ' + str(epoch))
 
             images = Variable(images).to(device)
@@ -354,7 +381,7 @@ def train():
             cnn.zero_grad()
 
             if 'cosine' in args.model_customize:
-                pred_original, _ = cnn(images)
+                pred_original, _, _ = cnn(images)
             else:
                 pred_original = cnn(images)
 
@@ -383,53 +410,76 @@ def train():
 
         scheduler.step(epoch)
 
-        # write log for tensorboard
-        tb_writer.add_scalar('Train_Loss', xentropy_loss_avg, epoch)
-        tb_writer.add_scalar('Train_Accuracy', train_acc, epoch)
-
-        if args.validation:
-            # test after each epoch
-            test_acc, test_auc = test(test_loader)
-
-            # output accuracy results
-            tqdm.write('test_acc: %.4f,   test_auc: %.4f' % (test_acc, test_auc))
-
+        # test every 10 epochs
+        if epoch % 10 == 0:
             # write log for tensorboard
-            tb_writer.add_scalar('Test_Accuracy', test_acc, epoch)
-            tb_writer.add_scalar('Test_AUC', test_auc, epoch)
+            tb_writer.add_scalar('Train_Loss', xentropy_loss_avg, epoch)
+            tb_writer.add_scalar('Train_Accuracy', train_acc, epoch)
 
-            test_balanced_acc, test_balanced_auc = test(test_balanced_loader)
-            tqdm.write('test_balanced_acc: %.4f,   test_balanced_auc: %.4f' % (test_balanced_acc, test_balanced_auc))
-            tb_writer.add_scalar('Test_Balanced_Accuracy', test_balanced_acc, epoch)
-            tb_writer.add_scalar('Test_Balanced_AUC', test_balanced_auc, epoch)
+            if args.validation:
+                # test after each epoch
+                test_acc, test_auc = test(test_loader)
 
-            # add into log file
-            row = {'epoch': str(epoch), 'loss': str(xentropy_loss_avg), 'train_acc': str(train_acc), 'test_acc': str(test_acc), 'test_balanced_acc': str(test_balanced_acc)}
+                # output accuracy results
+                tqdm.write('test_acc: %.4f,   test_auc: %.4f' % (test_acc, test_auc))
 
-        else:
-            # skip test if not validation
+                # write log for tensorboard
+                tb_writer.add_scalar('Test_Accuracy', test_acc, epoch)
+                tb_writer.add_scalar('Test_AUC', test_auc, epoch)
 
-            # add into log file
-            row = {'epoch': str(epoch), 'loss': str(xentropy_loss_avg), 'train_acc': str(train_acc)}
+                test_balanced_acc, test_balanced_auc = test(test_balanced_loader)
+                tqdm.write('test_balanced_acc: %.4f,   test_balanced_auc: %.4f' % (test_balanced_acc, test_balanced_auc))
+                tb_writer.add_scalar('Test_Balanced_Accuracy', test_balanced_acc, epoch)
+                tb_writer.add_scalar('Test_Balanced_AUC', test_balanced_auc, epoch)
 
-        logging.info(row)
+                # add into log file
+                row = {'epoch': str(epoch), 'loss': str(xentropy_loss_avg), 'train_acc': str(train_acc), 'test_acc': str(test_acc), 'test_balanced_acc': str(test_balanced_acc)}
+
+            else:
+                # skip test if not validation
+
+                # add into log file
+                row = {'epoch': str(epoch), 'loss': str(xentropy_loss_avg), 'train_acc': str(train_acc)}
+
+            logging.info(row)
 
         # save model
         torch.save(cnn.state_dict(), 'checkpoints/%s/%s/%s.pt' % (args.dataset, folder_name, filename))
 
 
 if args.test:
-    if 'cosine' in args.model_customize:
-        ood_method = 'cosine'
+
+    """original test/val data"""
+    print('\n%s\n' % filename)
+
+    # test ind performance
+    test_ind(args, cnn, test_loader)
+
+    # test ood performance
+    if args.ood_method != 'all':
+        print('\n[%s] ' % args.ood_method, end='')
+        test_ood(args, cnn, train_loader, test_loader, ood_loader, classes, ood_method=args.ood_method)
     else:
-        ood_method = args.ood_method
+        # test all ood methods
+        for ood_method in ood_options:
+            print('\n[%s] ' % ood_method, end='')
+            test_ood(args, cnn, train_loader, test_loader, ood_loader, classes, ood_method=ood_method)
 
-    print("Testing on original test data...")
-    test_with_ood(cnn, args.task, test_loader, ood_loader, classes, ood_method=ood_method, generate_result=args.generate_result, validation=args.validation)
-
-    if args.validation:
-        print("\nTesting on balanced test data...")
-        test_with_ood(cnn, args.task, test_balanced_loader, ood_loader, classes, ood_method=ood_method, generate_result=args.generate_result, validation=args.validation)
+    # """original test/val data"""
+    # print('\n%s\n' % filename)
+    #
+    # # test ind performance
+    # test_ind(args, cnn, test_balanced_loader)
+    #
+    # # test ood performance
+    # if args.ood_method != 'all':
+    #     print('\n[%s] ' % args.ood_method, end='')
+    #     test_ood(args, cnn, train_loader, test_balanced_loader, ood_loader, classes, ood_method=args.ood_method)
+    # else:
+    #     # test all ood methods
+    #     for ood_method in ood_options:
+    #         print('\n[%s] ' % ood_method, end='')
+    #         test_ood(args, cnn, train_loader, test_balanced_loader, ood_loader, classes, ood_method=ood_method)
 
 else:
     train()

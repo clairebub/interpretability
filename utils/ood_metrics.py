@@ -5,20 +5,53 @@ import numpy as np
 import sklearn.metrics as sk
 
 
-def fpr95_approx(ind_confidences, ood_confidences):
-    """calculate the false positive error when tpr is 95%"""
+# def fpr95_approx(ind_confidences, ood_confidences):
+#     """calculate the false positive error when tpr is 95%"""
+#
+#     y1 = ood_confidences
+#     x1 = ind_confidences
+#     threshold = np.percentile(x1, 5)
+#     fpr_base = np.sum(np.sum(y1 > threshold)) / np.float(len(y1))
+#
+#     return fpr_base, threshold
+#
+#
+# def fpr95(ind_confidences, ood_confidences):
+#     """calculate the false positive error when tpr is 95%"""
+#
+#     Y1 = ood_confidences
+#     X1 = ind_confidences
+#
+#     start = np.min([np.min(X1), np.min(Y1)])
+#     end = np.max([np.max(X1), np.max(Y1)])
+#     gap = (end - start) / 100000
+#
+#     if gap == 0:
+#         return 1
+#
+#     total = 0.0
+#     fpr = 0.0
+#     threshold = 0.0
+#     for delta in np.arange(start, end, gap):
+#         tpr = np.sum(np.sum(X1 >= delta)) / np.float(len(X1))
+#         error2 = np.sum(np.sum(Y1 > delta)) / np.float(len(Y1))
+#         if tpr <= 0.9505 and tpr >= 0.9495:
+#             fpr += error2
+#             threshold += delta
+#             total += 1
+#
+#     if total == 0:
+#         print('start={start}, end={end}, gap={gap}'.format(start=start, end=end, gap=gap))
+#         fprBase = 1
+#     else:
+#         fprBase = fpr / total
+#         threshold = threshold / total
+#
+#     return fprBase, threshold
 
-    y1 = ood_confidences
-    x1 = ind_confidences
-    threshold = np.percentile(x1, 5)
-    fpr_base = np.sum(np.sum(y1 > threshold)) / np.float(len(y1))
 
-    return fpr_base, threshold
-
-
-def fpr95(ind_confidences, ood_confidences):
-    """calculate the false positive error when tpr is 95%"""
-
+def tnr_at_tpr95(ind_confidences, ood_confidences):
+    # calculate the falsepositive error when tpr is 95%
     Y1 = ood_confidences
     X1 = ind_confidences
 
@@ -31,13 +64,11 @@ def fpr95(ind_confidences, ood_confidences):
 
     total = 0.0
     fpr = 0.0
-    threshold = 0.0
     for delta in np.arange(start, end, gap):
         tpr = np.sum(np.sum(X1 >= delta)) / np.float(len(X1))
         error2 = np.sum(np.sum(Y1 > delta)) / np.float(len(Y1))
         if tpr <= 0.9505 and tpr >= 0.9495:
             fpr += error2
-            threshold += delta
             total += 1
 
     if total == 0:
@@ -45,9 +76,8 @@ def fpr95(ind_confidences, ood_confidences):
         fprBase = 1
     else:
         fprBase = fpr / total
-        threshold = threshold / total
 
-    return fprBase, threshold
+    return 1 - fprBase
 
 
 def detection(ind_confidences, ood_confidences, n_iter=100000, return_data=False):
@@ -87,9 +117,9 @@ def cal_ood_metrics(measure_in, measure_out):
     """calculate OOD evaluation metrics"""
 
     # FNR@TPR95
-    fpr, threshold = fpr95(measure_in, measure_out)
-    print("FNR@TPR95 (higher is better): ", 1 - fpr)
-    print("TPR95 threshold:", threshold)
+    fnr = tnr_at_tpr95(measure_in, measure_out)
+    print("FNR@TPR95 (higher is better): ", fnr)
+    # print("TPR95 threshold:", threshold)
 
     # detection error
     detection_error, best_threshold = detection(measure_in, measure_out)
@@ -113,7 +143,7 @@ def cal_ood_metrics(measure_in, measure_out):
     aupr_out = sk.average_precision_score((in_out_lbl - 1) * -1, measure_all * -1)
     print("AUPR_OUT (higher is better): ", aupr_out)
 
-    # Mean of out-dist measure
-    out_mea_mean = np.mean(measure_out)
+    # # Mean of out-dist measure
+    # out_mea_mean = np.mean(measure_out)
 
-    return 1 - fpr, threshold, detection_error, best_threshold, auroc, aupr_in, aupr_out, out_mea_mean
+    return fnr, detection_error, best_threshold, auroc, aupr_in, aupr_out
