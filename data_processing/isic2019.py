@@ -22,7 +22,7 @@ import argparse
 import torch
 from torchvision import datasets, transforms
 
-# classes = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC']
+classes = ['MEL', 'NV', 'BCC', 'AK', 'BKL', 'DF', 'VASC', 'SCC']
 
 
 def five_fold_split_isic2019():
@@ -140,6 +140,8 @@ def get_data_statistics(dataset, task):
     """compute image data statistics (mean, std)"""
     data_transform = transforms.Compose([transforms.RandomResizedCrop(224),
                                          transforms.ToTensor()])
+
+    # isic2019_train_data = datasets.CIFAR10(root='data/ood/', train=True, transform=data_transform, download=True)
 
     isic2019_train_data = datasets.ImageFolder(root=data_path, transform=data_transform)
 
@@ -263,8 +265,8 @@ def data_cropping():
             cv2.imwrite('%s/%s' % (save_dir, image_name), croppted_image)
 
 
-# get_data_statistics('fashioniq2019', 'color')
-generate_balanced_test('fashioniq2019', 'color')
+get_data_statistics('fashioniq2019', 'color')
+# generate_balanced_test('fashioniq2019', 'color')
 
 
 # if __name__ == "__main__":
