@@ -26,3 +26,6 @@ ODIN: https://github.com/facebookresearch/odin
 
 challenge evaluation:
 isic-challenge-scoring classification /path/to/ISIC_GroundTruth.csv /path/to/ISIC_prediction.csv
+
+isic data:
+https://www.isic-archive.com/#!/topWithHeader/onlyHeaderTop/gallery
