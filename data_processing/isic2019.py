@@ -345,8 +345,8 @@ if __name__ == "__main__":
 
     elif args.task == 'segmentation':
         # find segmentation ground truth from isic2018
-        find_identical_images('../data/isic2019/skin_validation/', '../data_real/isic2018/ISIC2018_Task1-2_Training_Input/',
-                              '../data_real/isic2018/ISIC2018_Task1_Training_GroundTruth/', '../data/isic2019/skin_segmentation_validation/',
+        find_identical_images('../data/isic2019/skin_validation/', '../data/isic2018/ISIC2018_Task1-2_Training_Input/',
+                              '../data/isic2018/ISIC2018_Task1_Training_GroundTruth/', '../data/isic2019/skin_segmentation_validation/',
                               '../data/isic2019/skin_segmentation_validation_groundtruth/')
 
         resize_img('../data/isic2019/skin_segmentation_validation_groundtruth/')
