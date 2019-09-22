@@ -162,7 +162,47 @@ class GradCAM(_BaseWrapper):
         grads = self._find(self.grad_pool, target_layer)
         weights = self._compute_grad_weights(grads)
 
-        gcam = torch.mul(fmaps, weights).sum(dim=1, keepdim=True)
+        gcam = torch.mul(fmaps.cuda(), weights.cuda()).sum(dim=1, keepdim=True)
+        # gcam = torch.mul(fmaps, weights).sum(dim=1, keepdim=True)
+        gcam = F.relu(gcam)
+
+        gcam = F.interpolate(
+            gcam, self.image_shape, mode="bilinear", align_corners=False
+        )
+
+        B, C, H, W = gcam.shape
+        gcam = gcam.view(B, -1)
+        gcam -= gcam.min(dim=1, keepdim=True)[0]
+        gcam /= gcam.max(dim=1, keepdim=True)[0]
+        gcam = gcam.view(B, C, H, W)
+
+        return gcam
+
+    def generate_ensemble(self, target_layers):
+        # ToDo: To be generalized
+        # ToDo: Current code support two target_layers with same size
+
+        fmaps, grads, weights = [], [], []
+
+        for target_layer in target_layers:
+            fmaps.append(self._find(self.fmap_pool, target_layer))
+            grads = self._find(self.grad_pool, target_layer)
+            weights.append(self._compute_grad_weights(grads))
+
+        # get the max elements in weights
+        max_weights = torch.max(weights[0], weights[1])
+
+        weights0_idx = (max_weights == weights[0])
+        weights0_idx = weights0_idx.float()
+        weights[0] = weights[0] * weights0_idx
+
+        weights1_idx = (max_weights == weights[1])
+        weights1_idx = weights1_idx.float()
+        weights[1] = weights[1] * weights1_idx
+
+        gcam = torch.mul(fmaps[0].cuda(), weights[0].cuda()).sum(dim=1, keepdim=True) + torch.mul(fmaps[1].cuda(), weights[1].cuda()).sum(dim=1, keepdim=True)
+
+        # gcam = torch.mul(fmaps, weights).sum(dim=1, keepdim=True)
         gcam = F.relu(gcam)
 
         gcam = F.interpolate(
@@ -179,7 +219,7 @@ class GradCAM(_BaseWrapper):
 
 
 def occlusion_sensitivity(
-    model, images, ids, mean=None, patch=35, stride=1, n_batches=128
+        model, images, ids, mean=None, patch=35, stride=1, n_batches=128
 ):
     """
     "Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization"
@@ -221,9 +261,9 @@ def occlusion_sensitivity(
     for i in tqdm(range(0, len(anchors), n_batches), leave=False):
         batch_images = []
         batch_ids = []
-        for grid_h, grid_w in anchors[i : i + n_batches]:
+        for grid_h, grid_w in anchors[i: i + n_batches]:
             images_ = images.clone()
-            images_[..., grid_h : grid_h + patch_H, grid_w : grid_w + patch_W] = mean
+            images_[..., grid_h: grid_h + patch_H, grid_w: grid_w + patch_W] = mean
             batch_images.append(images_)
             batch_ids.append(ids)
         batch_images = torch.cat(batch_images, dim=0)

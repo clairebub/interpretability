@@ -56,4 +56,4 @@ class CosineResnetEnsemble(nn.Module):
         # scaled cosine sim
         scaled_cosine = cos_sim * scale
 
-        return scaled_cosine, cos_sim
+        return scaled_cosine, cos_sim, x

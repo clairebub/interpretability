@@ -6,9 +6,8 @@ import torch.nn.functional as F
 
 import numpy as np
 from sklearn import metrics
-from utils.ood_metrics import tnr_at_tpr95, detection
+from metrics.ood import tnr_at_tpr95, detection, AverageMeter
 from utils.misc import cov
-from utils.metric import AverageMeter
 
 
 class Baseline(object):
@@ -44,7 +43,7 @@ class Baseline(object):
             input = input.cuda()
             target = target.cuda()
 
-            if 'cosine' in self.config.model_customize:
+            if 'cosine' in self.config.model_type:
                 # get features before last layer for Mahalanobis methods
                 _, _, output = self.cnn.forward(input)
             else:
@@ -125,7 +124,7 @@ class InputPreProcess(Baseline):
         for input, _ in dataloader:
             input = input.cuda().requires_grad_(True)
 
-            if 'cosine' in self.config.model_customize:
+            if 'cosine' in self.config.model_type:
                 _, _, output = self.cnn.forward(input)
             else:
                 output = self.cnn.forward(input)
@@ -137,7 +136,7 @@ class InputPreProcess(Baseline):
             gradient = (gradient.float() - 0.5) * 2
             modified_input = torch.add(input.detach(), -self.perturb_magnitude, gradient)
 
-            if 'cosine' in self.config.model_customize:
+            if 'cosine' in self.config.model_type:
                 _, _, output = self.cnn.forward(modified_input)
             else:
                 output = self.cnn.forward(modified_input)
@@ -158,7 +157,7 @@ class ODIN(InputPreProcess):
             input = input.cuda()
             target = target.cuda()
 
-            if 'cosine' in self.config.model_customize:
+            if 'cosine' in self.config.model_type:
                 output, _, _ = self.cnn.forward(input)
             else:
                 output = self.cnn.forward(input)
@@ -187,7 +186,7 @@ class Mahalanobis(Baseline):
         self.init_mahalanobis(train_loader)
 
     def init_mahalanobis(self, dataloader):
-        if 'cosine' not in self.config.model_customize:
+        if 'cosine' not in self.config.model_type:
             self.cnn.module.fc = torch.nn.Identity()  # So we extract the features
 
         print('Init: Calculating Mahalanobis ...', len(dataloader))
@@ -198,7 +197,7 @@ class Mahalanobis(Baseline):
             input = input.cuda()
             target = target.cuda()
 
-            if 'cosine' in self.config.model_customize:
+            if 'cosine' in self.config.model_type:
                 _, _, feat = self.cnn.forward(input)
             else:
                 feat = self.cnn.forward(input)
