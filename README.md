@@ -14,7 +14,15 @@ pip install -r requirements.txt
 - Put into data folder
 ```bash
 python data_processing.py [-h]
-                          [--task {skin,meta,data_statistics}]
+                          [--task {skin,segmentation,meta,data_statistics}]
+```
+- Step 1: Data preparation for ISIC2019
+```bash
+python data_processing.py --task skin
+```
+- Step 2: Data preparation for segmentation (from ISIC2018)
+```bash
+python data_processing.py --task segmentation
 ```
 
 #### Model training and testing:
