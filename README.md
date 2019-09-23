@@ -20,7 +20,7 @@ python data_processing.py [-h]
 ```bash
 python data_processing.py --task skin
 ```
-- Step 2: Data preparation for segmentation (from ISIC2018)
+- Step 2: Data preparation for segmentation (Download and unzip data from ISIC2018)
 ```bash
 python data_processing.py --task segmentation
 ```
