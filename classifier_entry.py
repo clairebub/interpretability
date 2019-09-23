@@ -58,7 +58,8 @@ dataset_options = ['isic2019', 'cifar10', 'cifar100', 'fashioniq2019']
 task_options = ['skin', 'age_approx', 'anatom_site_general', 'sex', 'general']
 model_options = ['densenet121', 'densenet161', 'densenet169', 'densenet201', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'resnext101_32x8d', 'vgg13', 'vgg16']
 model_type_options = ['base', 'cosine', 'ensemble', 'ensemble_cosine']
-optim_options = ['SGD', 'Adam', 'RMSprop']
+# optim_options = ['SGD', 'Adam', 'RMSprop']
+optim_options = ['SGD']
 ood_dataset = ['tinyImageNet_resize', 'LSUN_resize', 'iSUN', 'cifar10', 'cifar100', 'svhn']
 ood_options = ['Baseline', 'ODIN', 'Mahalanobis', 'Mahalanobis_IPP', 'DeepMahalanobis', 'DeepMahalanobis_IPP']
 
@@ -76,7 +77,7 @@ parser.add_argument('--valid_steps', type=int, default=3)
 parser.add_argument('--seed', type=int, default=0)
 parser.add_argument('--optim', default='SGD', choices=optim_options)
 parser.add_argument('--learning_rate', type=float, default=0.001)
-parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
+# parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
 
 # default: no doing any of these
 parser.add_argument('--train', action='store_true')
@@ -86,7 +87,7 @@ parser.add_argument('--gradcam', action='store_true')
 parser.add_argument('--gradcam_conf', type=float, default=0.95)
 parser.add_argument('--gradcam_threshold', type=float, default=0.6)
 
-parser.add_argument('--test_segmentation', type=bool, default=True)
+parser.add_argument('--test_segmentation', action='store_true')
 
 parser.add_argument('--train_augmentation', action='store_true', help='augment train data by color')
 parser.add_argument('--test_augmentation', action='store_true', help='augment test data by five crop')

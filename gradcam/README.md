@@ -10,15 +10,10 @@ PyTorch implementation of Grad-CAM (Gradient-weighted Class Activation Mapping) 
 * opencv
 * tqdm
 
-## Usage for ISIC2019 Classification
-```sh
-python run.py isic2019 [OPTIONS]
-```
-
 ## Original usage
 
 ```sh
-python main.py demo1 [OPTIONS]
+python demo.py demo1 [OPTIONS]
 ```
 
 Options:
@@ -51,7 +46,7 @@ For instance, off-the-shelf `inception_v3` cannot cut off negative gradients dur
 Generate all kinds of visualization maps given a torchvision model, a target layer, and images.
 
 ```bash
-python main.py demo1 -a resnet152 \
+python demo.py demo1 -a resnet152 \
                      -t layer4 \
                      -i samples/cat_dog.png
 ```
@@ -59,7 +54,7 @@ python main.py demo1 -a resnet152 \
 You can specify multiple images like:
 
 ```bash
-python main.py demo1 -a resnet152 \
+python demo.py demo1 -a resnet152 \
                      -t layer4 \
                      -i samples/cat_dog.png \
                      -i samples/vegetables.jpg
@@ -85,7 +80,7 @@ Grad-CAM with different models for "bull mastiff" class
 Generate Grad-CAM at different layers of ResNet-152 for "bull mastiff" class.
 
 ```bash
-python main.py demo2 -i samples/cat_dog.png
+python demo.py demo2 -i samples/cat_dog.png
 ```
 
 |            Layer             |                       ```relu```                       |                       ```layer1```                       |                       ```layer2```                       |                       ```layer3```                       |                       ```layer4```                       |
@@ -99,7 +94,7 @@ Here we use Xception v1 from my other repo and visualize the response at the las
 If you want to adapt your own model, please verify the model uses only `nn.ReLU`, not `F.relu`.
 
 ```bash
-python main.py demo3 -i samples/cat_dog.png
+python demo.py demo3 -i samples/cat_dog.png
 ```
 
 |       Predicted class        |                           #1 bull mastiff                           |                           #2 tiger cat                           |                           #3 boxer                           |
@@ -112,7 +107,7 @@ Generate the occlusion sensitivity map [[1](##references), [3](##references)] ba
 The red and blue regions indicate a relative increase and decrease from non-occluded scores respectively: the blue regions are critical!
 
 ```bash
-python main.py demo4 -a resnet152 -i samples/cat_dog.png
+python demo.py demo4 -a resnet152 -i samples/cat_dog.png
 ```
 
 |           Patch size           |                          10x10                           |                          15x15                           |                          25x25                           |                          35x35                           |                          45x45                           |                          90x90                           |
