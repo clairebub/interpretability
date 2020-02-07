@@ -4,7 +4,7 @@
 # email: yilin.shen@samsung.com
 # Date: 2019-08-10
 #
-# This file is part of MRI project.
+# This file is part of ImageClassification project.
 # Base model train/valid/test
 #
 # This can not be copied and/or distributed
@@ -23,7 +23,7 @@ from utils import resource_allocation
 
 """restrict GPU option"""
 # find most open GPU (default use 4 gpus)
-gpu_list = resource_allocation.get_default_gpus(4)
+gpu_list = resource_allocation.get_default_gpus(8)
 gpu_ids = ','.join(map(str, gpu_list))
 
 # allocate GPU
@@ -43,18 +43,21 @@ from torch.autograd import Variable
 from torch.optim.lr_scheduler import MultiStepLR
 from torchvision import datasets, transforms
 
-from utils import optimizer, dataloader
+from data_processing import mrnet
 
-from models import ensemble_resnets, ensemble_cosine_resnets, resnet, cosine_resnet
+from utils import optimizer, classifier_dataloader
+
+from models.classifier import ensemble_resnets, ensemble_cosine_resnets, resnet, cosine_resnet
+from models.multiview_classifier import mvresnet, mvcnn
 
 from evaluation.ind_classification import ind_eval
 from evaluation.eval_classification import ind_eval_io, ood_eval_io
 from evaluation.eval_segmentation import segmentation_eval, segmentation_eval_each
 
-from gradcam.main import base_cam, ensemble_cam
+from gradcam.main import base_cam, ensemble_cam, multiview_cam
 
 """input arguments"""
-dataset_options = ['isic2019', 'cifar10', 'cifar100', 'fashioniq2019']
+dataset_options = ['isic2019', 'cifar10', 'cifar100', 'fashioniq2019', 'mrnet']
 task_options = ['skin', 'age_approx', 'anatom_site_general', 'sex', 'general']
 model_options = ['densenet121', 'densenet161', 'densenet169', 'densenet201', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'resnext101_32x8d', 'vgg13', 'vgg16']
 model_type_options = ['base', 'cosine', 'ensemble', 'ensemble_cosine']
@@ -65,15 +68,19 @@ ood_options = ['Baseline', 'ODIN', 'Mahalanobis', 'Mahalanobis_IPP', 'DeepMahala
 
 parser = argparse.ArgumentParser(description='train_model')
 
-parser.add_argument('--gpu_no', type=int, default=4)
-parser.add_argument('--task', default='skin', choices=task_options)
-parser.add_argument('--dataset', default='isic2019', choices=dataset_options)
-parser.add_argument('--model', default='resnet34', choices=model_options)
-parser.add_argument('--model_type', default='ensemble', choices=model_type_options)
+parser.add_argument('--gpu_no', type=int, default=8)
+# parser.add_argument('--task', default='skin', choices=task_options)
+# parser.add_argument('--dataset', default='isic2019', choices=dataset_options)
+# parser.add_argument('--model', default='resnet18', choices=model_options)
+# parser.add_argument('--model_type', default='base', choices=model_type_options)
 parser.add_argument('--ensemble_models', nargs="+", type=float, default=['resnet18', 'resnet34'])
+parser.add_argument('--task', default='pleural_effusion', choices=task_options)
+parser.add_argument('--dataset', default='chexpert', choices=dataset_options)
+parser.add_argument('--model', default='mvresnet34', choices=model_options)
+parser.add_argument('--model_type', default='multiview', choices=model_type_options)
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--epochs', type=int, default=150)
-parser.add_argument('--valid_steps', type=int, default=3)
+parser.add_argument('--valid_steps', type=int, default=1)
 parser.add_argument('--seed', type=int, default=0)
 parser.add_argument('--optim', default='SGD', choices=optim_options)
 parser.add_argument('--learning_rate', type=float, default=0.001)
@@ -96,6 +103,7 @@ parser.add_argument('--generate_result', action='store_true')
 parser.add_argument('--validation', action='store_true')
 parser.add_argument('--pretrained', action='store_true')
 
+parser.add_argument('--test_ood', action='store_true')
 parser.add_argument('--ood_dataset', default='LSUN_resize', choices=ood_dataset)
 parser.add_argument('--ood_method', default='all', choices=ood_options)
 parser.add_argument('--data_perturb_magnitude', nargs="+", type=float, default=[0.01])
@@ -119,7 +127,7 @@ np.random.seed(0)
 torch.cuda.manual_seed(args.seed)
 
 """define a universal filename"""
-folder_name = args.model_type + '_' + args.task
+folder_name = "classification/" + args.model_type + '_' + args.task
 
 filename = args.dataset + '_' \
            + args.task + '_' \
@@ -145,17 +153,18 @@ logging.basicConfig(filename='logs/%s/%s/%s.log' % (args.dataset, folder_name, f
 with open('data_processing/data_statistics.json') as json_file:
     data = json.load(json_file)
 
-    mean = data[args.dataset]['mean']
-    std = data[args.dataset]['std']
+    entry = '%s_%s' % (args.dataset, args.task)
+    mean = data[entry]['mean']
+    std = data[entry]['std']
 
     print("%s: mean=[%s] std=[%s]" % (args.dataset, ', '.join(map(str, mean)), ', '.join(map(str, std))))
 
 # data normalization
 normalize = transforms.Normalize(mean=mean, std=std)
 
-# load training data
+if args.model_type == 'multiview':
 
-if 'isic' in args.dataset:
+    # load train data
     if args.train_augmentation:
         train_transform = transforms.Compose([
             transforms.Resize(256),
@@ -176,104 +185,155 @@ if 'isic' in args.dataset:
             normalize
         ])
 
-    train_data = datasets.ImageFolder(root='data/%s/%s_training%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=train_transform)
-elif args.dataset == 'cifar10':
-    if args.train_augmentation:
-        train_transform = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ])
-    else:
-        train_transform = transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-        ])
+    train_data = classifier_dataloader.MultiViewDataSet(root='data/%s/%s_training%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=train_transform)
 
-    train_data = datasets.CIFAR10(root='data/standard/', train=True, transform=train_transform, download=False)
-elif args.dataset == 'cifar100':
-    if args.train_augmentation:
-        train_transform = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ])
-    else:
-        train_transform = transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-        ])
+    train_loader = torch.utils.data.DataLoader(dataset=train_data,
+                                               batch_size=args.batch_size,
+                                               shuffle=True,
+                                               num_workers=16)
 
-    train_data = datasets.CIFAR100(root='data/standard/', train=True, transform=train_transform, download=False)
-else:
-    raise RuntimeError('Training dataset not available')
-
-train_loader = torch.utils.data.DataLoader(dataset=train_data,
-                                           batch_size=args.batch_size,
-                                           shuffle=True,
-                                           num_workers=16)
-
-classes = train_data.classes
-num_classes = len(train_data.classes)
-
-# load valid data
-valid_transform = transforms.Compose([
-    transforms.ToTensor(),
-    normalize,
-])
-
-if 'isic' in args.dataset:
+    # load valid data
     valid_transform = transforms.Compose([
         transforms.Resize(size=(224, 224)),
         transforms.ToTensor(),
         normalize
     ])
 
-    valid_data = datasets.ImageFolder(root='data/%s/%s_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=valid_transform)
-elif args.dataset == 'cifar10':
-    valid_data = datasets.CIFAR10(root='data/standard/', train=False, transform=train_transform, download=True)
-elif args.dataset == 'cifar100':
-    valid_data = datasets.CIFAR100(root='data/standard/', train=False, transform=train_transform, download=True)
+    valid_data = classifier_dataloader.MultiViewDataSet(root='data/%s/%s_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=valid_transform)
+
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data,
+                                               batch_size=args.batch_size,
+                                               shuffle=False,
+                                               num_workers=16)
+    valid_balanced_loader = None
+
 else:
-    raise RuntimeError('Valid dataset not available')
 
-valid_loader = torch.utils.data.DataLoader(dataset=valid_data,
-                                           batch_size=args.batch_size,
-                                           shuffle=False,
-                                           num_workers=16)
+    # load training data
+    if 'isic' in args.dataset:
+        if args.train_augmentation:
+            train_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.RandomResizedCrop(224),
+                transforms.ColorJitter(brightness=0.05, contrast=0.05, saturation=0.05, hue=0.05),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.RandomRotation(10),
+                transforms.ToTensor(),
+                normalize
+            ])
+        else:
+            train_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize
+            ])
 
-valid_data_balanced = None
-if args.validation and os.path.exists('data/%s/%s_validation_balanced' % (args.dataset, args.task)):
-    valid_data_balanced = datasets.ImageFolder(root='data/%s/%s_validation_balanced' % (args.dataset, args.task), transform=valid_transform)
-    valid_balanced_loader = torch.utils.data.DataLoader(dataset=valid_data_balanced,
-                                                        batch_size=args.batch_size,
-                                                        shuffle=False,
-                                                        num_workers=16)
+        train_data = datasets.ImageFolder(root='data/%s/%s_training%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=train_transform)
+    elif args.dataset == 'mrnet':
+        train_data, valid_data = mrnet.load_data()
+    elif args.dataset == 'cifar10':
+        if args.train_augmentation:
+            train_transform = transforms.Compose([
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+            ])
+        else:
+            train_transform = transforms.Compose([
+                transforms.ToTensor(),
+                normalize,
+            ])
 
-# load ood data
-if args.ood_dataset == 'isic':
-    ood_dataset = datasets.ImageFolder(root='data/standard/isic', transform=valid_transform)
-elif args.ood_dataset == 'tinyImageNet_resize':
-    ood_dataset = datasets.ImageFolder(root='data/standard/TinyImagenet_resize', transform=valid_transform)
-elif args.ood_dataset == 'LSUN_resize':
-    ood_dataset = datasets.ImageFolder(root='data/standard/LSUN_resize', transform=valid_transform)
-elif args.ood_dataset == 'iSUN':
-    ood_dataset = datasets.ImageFolder(root='data/standard/iSUN', transform=valid_transform)
-elif args.ood_dataset == 'cifar10':
-    ood_dataset = datasets.CIFAR10(root='data/standard/', train=False, transform=valid_transform, download=True)
-elif args.ood_dataset == 'cifar100':
-    ood_dataset = datasets.CIFAR100(root='data/standard/', train=False, transform=valid_transform, download=True)
-elif args.ood_dataset == 'svhn':
-    ood_dataset = datasets.SVHN(root='data/standard/svhn', split='valid', transform=valid_transform, download=True)
-else:
-    raise RuntimeError('OOD dataset not available')
+        train_data = datasets.CIFAR10(root='data/standard/', train=True, transform=train_transform, download=False)
+    elif args.dataset == 'cifar100':
+        if args.train_augmentation:
+            train_transform = transforms.Compose([
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+            ])
+        else:
+            train_transform = transforms.Compose([
+                transforms.ToTensor(),
+                normalize,
+            ])
 
-ood_loader = torch.utils.data.DataLoader(dataset=ood_dataset,
-                                         batch_size=args.batch_size,
-                                         shuffle=False,
-                                         num_workers=16)
+        train_data = datasets.CIFAR100(root='data/standard/', train=True, transform=train_transform, download=False)
+    else:
+        raise RuntimeError('Training dataset not available')
+
+    train_loader = torch.utils.data.DataLoader(dataset=train_data,
+                                               batch_size=args.batch_size,
+                                               shuffle=True,
+                                               num_workers=16)
+
+    # load valid data
+    valid_transform = transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    if 'isic' in args.dataset:
+        valid_transform = transforms.Compose([
+            transforms.Resize(size=(224, 224)),
+            transforms.ToTensor(),
+            normalize
+        ])
+
+        valid_data = datasets.ImageFolder(root='data/%s/%s_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=valid_transform)
+    elif args.dataset == 'mrnet':
+        pass
+    elif args.dataset == 'cifar10':
+        valid_data = datasets.CIFAR10(root='data/standard/', train=False, transform=train_transform, download=True)
+    elif args.dataset == 'cifar100':
+        valid_data = datasets.CIFAR100(root='data/standard/', train=False, transform=train_transform, download=True)
+    else:
+        raise RuntimeError('Valid dataset not available')
+
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data,
+                                               batch_size=args.batch_size,
+                                               shuffle=False,
+                                               num_workers=16)
+
+    valid_data_balanced = None
+    if args.validation and os.path.exists('data/%s/%s_validation_balanced' % (args.dataset, args.task)):
+        valid_data_balanced = datasets.ImageFolder(root='data/%s/%s_validation_balanced' % (args.dataset, args.task), transform=valid_transform)
+        valid_balanced_loader = torch.utils.data.DataLoader(dataset=valid_data_balanced,
+                                                            batch_size=args.batch_size,
+                                                            shuffle=False,
+                                                            num_workers=16)
+
+    # load ood data
+    if args.test_ood:
+        if args.ood_dataset == 'isic':
+            ood_dataset = datasets.ImageFolder(root='data/standard/isic', transform=valid_transform)
+        elif args.ood_dataset == 'tinyImageNet_resize':
+            ood_dataset = datasets.ImageFolder(root='data/standard/TinyImagenet_resize', transform=valid_transform)
+        elif args.ood_dataset == 'LSUN_resize':
+            ood_dataset = datasets.ImageFolder(root='data/standard/LSUN_resize', transform=valid_transform)
+        elif args.ood_dataset == 'iSUN':
+            ood_dataset = datasets.ImageFolder(root='data/standard/iSUN', transform=valid_transform)
+        elif args.ood_dataset == 'cifar10':
+            ood_dataset = datasets.CIFAR10(root='data/standard/', train=False, transform=valid_transform, download=True)
+        elif args.ood_dataset == 'cifar100':
+            ood_dataset = datasets.CIFAR100(root='data/standard/', train=False, transform=valid_transform, download=True)
+        elif args.ood_dataset == 'svhn':
+            ood_dataset = datasets.SVHN(root='data/standard/svhn', split='valid', transform=valid_transform, download=True)
+        else:
+            raise RuntimeError('OOD dataset not available')
+
+        ood_loader = torch.utils.data.DataLoader(dataset=ood_dataset,
+                                                 batch_size=args.batch_size,
+                                                 shuffle=False,
+                                                 num_workers=16)
+
+classes = train_data.classes
+num_classes = len(train_data.classes)
 
 """model loading"""
 
@@ -281,76 +341,54 @@ ood_loader = torch.utils.data.DataLoader(dataset=ood_dataset,
 if args.model_type == 'base':
     if 'resnet' in args.model:
         cnn = resnet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes)
-        # cnn = ml.__dict__[args.model](pretrained=args.pretrained)
     else:
         cnn = ml.__dict__[args.model](pretrained=args.pretrained)
 elif args.model_type == 'cosine':
     cnn = cosine_resnet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes)
-    # if 'resnet' in args.model:
-    #     cnn = cosine_resnet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes)
-    # else:
-    #     cnn = cosine_net.CosineNet(ml.__dict__[args.model](pretrained=args.pretrained), num_classes)
 elif 'ensemble' in args.model_type:
 
-    if 'cosine' in args.model_type:
-        single_nets = []
+    ensemble_model_lookup = {2: ensemble_resnets.ResnetEnsemble2,
+                             3: ensemble_resnets.ResnetEnsemble3}
 
-        for ensemble_model in args.ensemble_models:
-            ensemble_model_checkpoint = args.dataset + '_' \
-                                        + args.task + '_' \
-                                        + ('aug' if args.train_augmentation else 'noaug') + '_' \
-                                        + 'cosine_' \
-                                        + ensemble_model + '_' \
-                                        + str(args.batch_size) + '_' \
-                                        + ('ft' if args.pretrained else '') \
-                                        + ('' if args.validation else '_full')
+    single_nets = []
 
-            print('Loading pretrained %s model...' % ensemble_model)
+    for ensemble_model in args.ensemble_models:
+        ensemble_model_checkpoint = args.dataset + '_' \
+                                    + args.task + '_' \
+                                    + ('aug' if args.train_augmentation else 'noaug') + '_' \
+                                    + args.model_type + '_' \
+                                    + ensemble_model + '_' \
+                                    + str(args.batch_size) + '_' \
+                                    + ('ft' if args.pretrained else '') \
+                                    + ('' if args.validation else '_full')
 
-            cnn_en = nn.DataParallel(cosine_resnet.__dict__[ensemble_model](pretrained=args.pretrained, num_classes=num_classes))
-            cnn_en.load_state_dict(torch.load('checkpoints/%s/cosine_%s/%s.pt' % (args.dataset, args.task, ensemble_model_checkpoint)))
+        print('Loading pretrained %s model...' % ensemble_model)
 
-            single_nets.append(cnn_en)
+        cnn_en = nn.DataParallel(resnet.__dict__[ensemble_model](pretrained=args.pretrained, num_classes=num_classes))
+        cnn_en.load_state_dict(torch.load('checkpoints/classification/%s/base_%s/%s.pt' % (args.dataset, args.task, ensemble_model_checkpoint)))
 
-        cnn = ensemble_cosine_resnets.CosineResnetEnsemble(single_nets, num_classes)
-    
-    else:
-        ensemble_model_lookup = {2: ensemble_resnets.ResnetEnsemble2,
-                                 3: ensemble_resnets.ResnetEnsemble3}
+        single_nets.append(cnn_en)
 
-        single_nets = []
+    cnn = ensemble_model_lookup[len(args.ensemble_models)](single_nets, num_classes)
 
-        for ensemble_model in args.ensemble_models:
-            ensemble_model_checkpoint = args.dataset + '_' \
-                                        + args.task + '_' \
-                                        + ('aug' if args.train_augmentation else 'noaug') + '_' \
-                                        + 'base_' \
-                                        + ensemble_model + '_' \
-                                        + str(args.batch_size) + '_' \
-                                        + ('ft' if args.pretrained else '') \
-                                        + ('' if args.validation else '_full')
-
-            print('Loading pretrained %s model...' % ensemble_model)
-
-            cnn_en = nn.DataParallel(resnet.__dict__[ensemble_model](pretrained=args.pretrained, num_classes=num_classes))
-            # cnn_en = nn.DataParallel(ml.__dict__[ensemble_model](pretrained=args.pretrained))
-            cnn_en.load_state_dict(torch.load('checkpoints/%s/base_%s/%s.pt' % (args.dataset, args.task, ensemble_model_checkpoint)))
-
-            single_nets.append(cnn_en)
-
-        cnn = ensemble_model_lookup[len(args.ensemble_models)](single_nets, num_classes)
-
+elif args.model_type == 'multiview':
+    cnn = mvresnet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes)
 else:
     raise RuntimeError('customized model not supported')
 
 # cnn = nn.DataParallel(cnn, device_ids=gpu_list)
 cnn = nn.DataParallel(cnn)
 
+# ### test test
+# modules = []
+# for name, module in cnn.named_modules():
+#     modules.append(name)
+
 # load model if trained before
 if not os.path.exists('checkpoints'):
     os.makedirs('checkpoints')
 
-model_file = 'checkpoints/%s/%s/%s.pt' % (args.dataset, folder_name, filename)
+model_file = 'checkpoints/classification/%s/%s/%s.pt' % (args.dataset, folder_name, filename)
 if os.path.isfile(model_file):
     pretrained_dict = torch.load(model_file)
     cnn.load_state_dict(pretrained_dict)
@@ -359,8 +397,8 @@ else:
     if args.test:
         raise RuntimeError('model not trained')
     else:
-        if not os.path.exists('checkpoints/%s/%s' % (args.dataset, folder_name)):
-            os.makedirs('checkpoints/%s/%s' % (args.dataset, folder_name))
+        if not os.path.exists('checkpoints/classification/%s/%s' % (args.dataset, folder_name)):
+            os.makedirs('checkpoints/classification/%s/%s' % (args.dataset, folder_name))
 
 
 def train():
@@ -370,7 +408,6 @@ def train():
     prediction_criterion = nn.NLLLoss().to(device)
 
     # define optimizer
-
     if 'cosine' in args.model_type:
         optim = 'SGDNoWeightDecayLast'
     else:
@@ -408,6 +445,9 @@ def train():
         # for i, (images, labels, paths) in enumerate(progress_bar):
         for i, (images, labels) in enumerate(progress_bar):
             progress_bar.set_description('Epoch ' + str(epoch))
+
+            if args.model_type == 'multiview':
+                images = torch.stack(images, dim=1)
 
             images = Variable(images).to(device)
             labels = Variable(labels).to(device)
@@ -487,7 +527,7 @@ def train():
             logging.info(row)
 
         # save model
-        torch.save(cnn.state_dict(), 'checkpoints/%s/%s/%s.pt' % (args.dataset, folder_name, filename))
+        torch.save(cnn.state_dict(), 'checkpoints/classification/%s/%s/%s.pt' % (args.dataset, folder_name, filename))
 
 
 if args.train:
@@ -504,15 +544,16 @@ else:
             ind_eval_io(args, cnn, test_data_loader)
 
             """test ood performance"""
-            if args.ood_method != 'all':
-                ood_methods = [args.ood_method]
-            else:
-                ood_methods = ood_options
+            if args.test_ood:
+                if args.ood_method != 'all':
+                    ood_methods = [args.ood_method]
+                else:
+                    ood_methods = ood_options
 
-            # test ood
-            for ood_method in ood_methods:
-                print('\n[%s] ' % ood_method, end='')
-                ood_eval_io(args, cnn, train_loader, test_data_loader, ood_loader, classes, ood_method=ood_method)
+                # test ood
+                for ood_method in ood_methods:
+                    print('\n[%s] ' % ood_method, end='')
+                    ood_eval_io(args, cnn, train_loader, test_data_loader, ood_loader, classes, ood_method=ood_method)
 
         # original test/val data
         run_test(valid_loader)
@@ -523,10 +564,18 @@ else:
 
     # run grad-cam
     gradcam_result_path = 'results/grad_cam/{}/{}/{}/{}_{}'.format(args.dataset, folder_name, filename, args.gradcam_conf, args.gradcam_threshold)
+    if not os.path.exists(gradcam_result_path):
+        os.makedirs(gradcam_result_path)
+
     if args.gradcam:
 
         # load new validation data
-        valid_data = dataloader.ImageFolderWithPaths(root='data/%s/%s_segmentation_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=valid_transform)
+        if args.model_type == 'multiview':
+            valid_data = classifier_dataloader.MultiViewDataSetWithPaths(root='data/%s/%s_segmentation_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'),
+                                                                         transform=valid_transform)
+        else:
+            valid_data = classifier_dataloader.ImageFolderWithPaths(root='data/%s/%s_segmentation_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'),
+                                                                    transform=valid_transform)
 
         valid_loader = torch.utils.data.DataLoader(dataset=valid_data,
                                                    batch_size=1,
@@ -538,14 +587,23 @@ else:
 
         for image_batch, label_batch, path_batch in valid_loader:
 
-            # skip if already processed
-            if not os.path.exists('%s/%s' % (gradcam_result_path, ntpath.basename(path_batch[0]))):
-                label_batch = torch.unsqueeze(label_batch, dim=1)
+            if args.model_type == 'multiview':
+                # skip if already processed the first view (others by default)
+                # if not os.path.exists('%s/%s' % (gradcam_result_path, ntpath.basename(path_batch[0][0]))):
+                multiview_cam(image_batch, label_batch, path_batch, cnn, gradcam_result_path, args.gradcam_conf, args.gradcam_threshold)
+            else:
+                # skip if already processed
+                if not os.path.exists('%s/%s' % (gradcam_result_path, ntpath.basename(path_batch[0]))):
+                    label_batch = torch.unsqueeze(label_batch, dim=1)
 
-                if args.model_type == 'ensemble':
-                    ensemble_cam(list(path_batch), mean, std, label_batch, cnn, gradcam_result_path, args.gradcam_conf, args.gradcam_threshold)
-                else:
-                    base_cam(list(path_batch), mean, std, label_batch, cnn, gradcam_result_path, args.gradcam_conf, args.gradcam_threshold)
+                    if args.model_type == 'base':
+                        base_cam(list(path_batch), mean, std, label_batch, cnn, gradcam_result_path, args.gradcam_conf, args.gradcam_threshold)
+                    elif args.model_type == 'ensemble':
+                        ensemble_cam(list(path_batch), mean, std, label_batch, cnn, gradcam_result_path, args.gradcam_conf, args.gradcam_threshold)
+                    else:
+                        raise RuntimeError('customized model not supported')
+
+            break
 
     # evaluate segmentation results
     if args.test_segmentation:

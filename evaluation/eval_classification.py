@@ -18,8 +18,6 @@ from torchvision.utils import save_image
 
 from evaluation import ind_classification, ood_detection
 
-from utils.dataloader import Denormalize
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # denorm = Denormalize(mean=[0.6796547, 0.5259538, 0.51874095], std=[0.18123391, 0.18504128, 0.19822954])

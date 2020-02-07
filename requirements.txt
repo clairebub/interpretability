@@ -5,4 +5,3 @@ numpy==1.16.2
 nvidia-ml-py3
 lmdb
 tensorboardX
-tensorflow

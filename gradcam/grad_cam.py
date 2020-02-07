@@ -51,8 +51,8 @@ class _BaseWrapper(object):
         one_hot = self._encode_one_hot(ids)
         self.logits.backward(gradient=one_hot, retain_graph=True)
 
-    def generate(self):
-        raise NotImplementedError
+    # def generate(self):
+    #     raise NotImplementedError
 
     def remove_hook(self):
         """
@@ -124,25 +124,33 @@ class GradCAM(_BaseWrapper):
         self.grad_pool = OrderedDict()
         self.candidate_layers = candidate_layers  # list
 
+        # self.grad_list = []
+        # def print_grad(grad):
+        #     self.grad_list.append(grad)
+
         def forward_hook(key):
             def forward_hook_(module, input, output):
                 # Save featuremaps
-                self.fmap_pool[key] = output.detach()
+                self.fmap_pool.setdefault(key, []).append(output.detach())
+                # self.fmap_pool[key] = output.detach()
 
             return forward_hook_
 
         def backward_hook(key):
             def backward_hook_(module, grad_in, grad_out):
                 # Save the gradients correspond to the featuremaps
-                self.grad_pool[key] = grad_out[0].detach()
+                self.grad_pool.setdefault(key, []).append(grad_out[0].detach())
+                # self.grad_pool[key] = grad_out[0].detach()
 
             return backward_hook_
 
-        # If any candidates are not specified, the hook is registered to all the layers.
+        # if any candidates are not specified, the hook is registered to all the layers
         for name, module in self.model.named_modules():
             if self.candidate_layers is None or name in self.candidate_layers:
                 self.handlers.append(module.register_forward_hook(forward_hook(name)))
                 self.handlers.append(module.register_backward_hook(backward_hook(name)))
+
+                # module.register_backward_hook(print_grad)
 
     def _find(self, pool, target_layer):
         if target_layer in pool.keys():
@@ -153,13 +161,17 @@ class GradCAM(_BaseWrapper):
     def _compute_grad_weights(self, grads):
         return F.adaptive_avg_pool2d(grads, 1)
 
-    def forward(self, image):
-        self.image_shape = image.shape[2:]
+    def forward(self, image, multiview=False):
+        if multiview is False:
+            self.image_shape = image.shape[2:]
+        else:
+            self.image_shape = image.shape[3:]
+
         return super(GradCAM, self).forward(image)
 
-    def generate(self, target_layer):
-        fmaps = self._find(self.fmap_pool, target_layer)
-        grads = self._find(self.grad_pool, target_layer)
+    def generate_base(self, target_layer):
+        fmaps = self._find(self.fmap_pool, target_layer)[0]
+        grads = self._find(self.grad_pool, target_layer)[0]
         weights = self._compute_grad_weights(grads)
 
         gcam = torch.mul(fmaps.cuda(), weights.cuda()).sum(dim=1, keepdim=True)
@@ -185,8 +197,8 @@ class GradCAM(_BaseWrapper):
         fmaps, grads, weights = [], [], []
 
         for target_layer in target_layers:
-            fmaps.append(self._find(self.fmap_pool, target_layer))
-            grads = self._find(self.grad_pool, target_layer)
+            fmaps.append(self._find(self.fmap_pool, target_layer)[0])
+            grads = self._find(self.grad_pool, target_layer)[0]
             weights.append(self._compute_grad_weights(grads))
 
         # get the max elements in weights
@@ -216,6 +228,32 @@ class GradCAM(_BaseWrapper):
         gcam = gcam.view(B, C, H, W)
 
         return gcam
+
+    def generate_multiview(self, target_layer):
+        fmaps_views = self._find(self.fmap_pool, target_layer)
+        grads_views = self._find(self.grad_pool, target_layer)
+
+        gcam_views = []
+        for fmaps, grads in zip(fmaps_views, grads_views):
+            weights = self._compute_grad_weights(grads)
+
+            gcam = torch.mul(fmaps.cuda(), weights.cuda()).sum(dim=1, keepdim=True)
+            # gcam = torch.mul(fmaps, weights).sum(dim=1, keepdim=True)
+            gcam = F.relu(gcam)
+
+            gcam = F.interpolate(
+                gcam, self.image_shape, mode="bilinear", align_corners=False
+            )
+
+            B, C, H, W = gcam.shape
+            gcam = gcam.view(B, -1)
+            gcam -= gcam.min(dim=1, keepdim=True)[0]
+            gcam /= gcam.max(dim=1, keepdim=True)[0]
+            gcam = gcam.view(B, C, H, W)
+
+            gcam_views.append(gcam)
+
+        return gcam_views
 
 
 def occlusion_sensitivity(
