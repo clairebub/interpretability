@@ -54,7 +54,7 @@ from evaluation.ind_classification import ind_eval
 from evaluation.eval_classification import ind_eval_io, ood_eval_io
 from evaluation.eval_segmentation import segmentation_eval, segmentation_eval_each
 
-from gradcam.main import base_cam, ensemble_cam, multiview_cam
+from gradcam.entry import base_cam, ensemble_cam, multiview_cam
 
 """input arguments"""
 dataset_options = ['isic2019', 'cifar10', 'cifar100', 'fashioniq2019', 'mrnet']
@@ -91,6 +91,7 @@ parser.add_argument('--train', action='store_true')
 parser.add_argument('--test', action='store_true')
 
 parser.add_argument('--gradcam', action='store_true')
+parser.add_argument('--test_gradcam', action='store_true')
 parser.add_argument('--gradcam_conf', type=float, default=0.95)
 parser.add_argument('--gradcam_threshold', type=float, default=0.6)
 
@@ -530,33 +531,34 @@ def train():
         torch.save(cnn.state_dict(), 'checkpoints/classification/%s/%s/%s.pt' % (args.dataset, folder_name, filename))
 
 
+def test(test_data_loader):
+
+    print('\n%s\n' % filename)
+
+    """test ind performance"""
+    ind_eval_io(args, cnn, test_data_loader)
+
+    """test ood performance"""
+    if args.test_ood:
+        if args.ood_method != 'all':
+            ood_methods = [args.ood_method]
+        else:
+            ood_methods = ood_options
+
+        # test ood
+        for ood_method in ood_methods:
+            print('\n[%s] ' % ood_method, end='')
+            ood_eval_io(args, cnn, train_loader, test_data_loader, ood_loader, classes, ood_method=ood_method)
+
+
 if args.train:
     train()
 else:
     # run test
     if args.test:
 
-        def run_test(test_data_loader):
-
-            print('\n%s\n' % filename)
-
-            """test ind performance"""
-            ind_eval_io(args, cnn, test_data_loader)
-
-            """test ood performance"""
-            if args.test_ood:
-                if args.ood_method != 'all':
-                    ood_methods = [args.ood_method]
-                else:
-                    ood_methods = ood_options
-
-                # test ood
-                for ood_method in ood_methods:
-                    print('\n[%s] ' % ood_method, end='')
-                    ood_eval_io(args, cnn, train_loader, test_data_loader, ood_loader, classes, ood_method=ood_method)
-
         # original test/val data
-        run_test(valid_loader)
+        test(valid_loader)
 
         # # balanced test/val data
         # if valid_balanced_loader is not None:
@@ -564,10 +566,10 @@ else:
 
     # run grad-cam
     gradcam_result_path = 'results/grad_cam/{}/{}/{}/{}_{}'.format(args.dataset, folder_name, filename, args.gradcam_conf, args.gradcam_threshold)
-    if not os.path.exists(gradcam_result_path):
-        os.makedirs(gradcam_result_path)
-
     if args.gradcam:
+
+        if not os.path.exists(gradcam_result_path):
+            os.makedirs(gradcam_result_path)
 
         # load new validation data
         if args.model_type == 'multiview':
@@ -582,15 +584,14 @@ else:
                                                    shuffle=False,
                                                    num_workers=16)
 
-        if not os.path.exists(gradcam_result_path):
-            os.makedirs(gradcam_result_path)
-
         for image_batch, label_batch, path_batch in valid_loader:
 
             if args.model_type == 'multiview':
+                path_token = path_batch[0][0].split('/')
+
                 # skip if already processed the first view (others by default)
-                # if not os.path.exists('%s/%s' % (gradcam_result_path, ntpath.basename(path_batch[0][0]))):
-                multiview_cam(image_batch, label_batch, path_batch, cnn, gradcam_result_path, args.gradcam_conf, args.gradcam_threshold)
+                if not os.path.exists('%s/%s' % (gradcam_result_path, '/'.join(path_token[-3:]))):
+                    multiview_cam(image_batch, label_batch, path_batch, cnn, gradcam_result_path, args.gradcam_conf, args.gradcam_threshold)
             else:
                 # skip if already processed
                 if not os.path.exists('%s/%s' % (gradcam_result_path, ntpath.basename(path_batch[0]))):
@@ -603,7 +604,21 @@ else:
                     else:
                         raise RuntimeError('customized model not supported')
 
-            break
+    # evaluate gradcam via accuracy
+    if args.test_gradcam:
+
+        if args.model_type == 'multiview':
+
+            valid_gradcam_data = classifier_dataloader.MultiViewDataSet(root=gradcam_result_path, transform=valid_transform)
+
+            valid_gradcam_loader = torch.utils.data.DataLoader(dataset=valid_gradcam_data,
+                                                       batch_size=args.batch_size,
+                                                       shuffle=False,
+                                                       num_workers=16)
+        else:
+            raise RuntimeError('model not supported')
+
+        test(valid_gradcam_loader)
 
     # evaluate segmentation results
     if args.test_segmentation:

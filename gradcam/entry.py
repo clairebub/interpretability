@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import shutil
 import ntpath
+import os
 import os.path as osp
 
 import cv2
@@ -80,6 +81,7 @@ def highlight_gradcam(filename, gcam, raw_image, threshold):
     cmap = cm.binary(gcam_binary)[..., :3] * 255.0
 
     gcam = (1 - alpha) * cmap + alpha * raw_image
+    # gcam = alpha * cmap + (1 - alpha) * raw_image
     cv2.imwrite(filename, np.uint8(gcam))
 
 
@@ -333,8 +335,8 @@ def multiview_cam(images, labels, paths, cnn, output_dir, conf, threshold, gradc
 
             for j, view_path in enumerate(view_paths):
 
-                # copy original image
-                shutil.copy(view_path, output_dir)
+                # # copy original image
+                # shutil.copy(view_path, output_dir)
 
                 print("\t#{}: {} ({:.5f})".format(view_path, ids[j, 0], probs[j, 0]))
 
@@ -345,18 +347,33 @@ def multiview_cam(images, labels, paths, cnn, output_dir, conf, threshold, gradc
                 raw_image = cv2.imread(view_path)
                 raw_image = cv2.resize(raw_image, (224,) * 2)
 
-                # print(regions_views[i][j, 0])
-                # print(raw_image)
+                # get save sub path
+                path_token = view_path.split('/')
+                sub_path = '/'.join(path_token[-3:-1])
+                if not os.path.exists(osp.join(output_dir, sub_path)):
+                    os.makedirs(osp.join(output_dir, sub_path))
 
-                save_gradcam(
+                # save_gradcam(
+                #     filename=osp.join(
+                #         output_dir,
+                #         sub_path,
+                #         "{}-gradcam-{}-{}-{}.png".format(
+                #             ntpath.basename(view_path), target_layer.replace('module.', ''), labels[j], ids[j, 0]
+                #         ),
+                #     ),
+                #     gcam=regions_views[i][j, 0],
+                #     raw_image=raw_image
+                # )
+
+                highlight_gradcam(
                     filename=osp.join(
                         output_dir,
-                        "{}-gradcam-{}-{}-{}.png".format(
-                            ntpath.basename(view_path), target_layer.replace('module.', ''), labels[j], ids[j, 0]
-                        ),
+                        sub_path,
+                        ntpath.basename(view_path),
                     ),
                     gcam=regions_views[i][j, 0],
-                    raw_image=raw_image
+                    raw_image=raw_image,
+                    threshold=threshold
                 )
 
                 # # ToDo: threshold to be learned
