@@ -95,9 +95,12 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000):
+    def __init__(self, block, layers, num_classes=1000, multiview_model_type='pooling'):
+        self.multiview_model_type = multiview_model_type
+
         self.inplanes = 64
         super(ResNet, self).__init__()
+
         self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
@@ -107,7 +110,11 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
         self.avgpool = nn.AvgPool2d(7, stride=1) #nn.AdaptiveAvgPool2d(7)
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+
+        if 'cat' in self.multiview_model_type:
+            self.fc = nn.Linear(512 * block.expansion * 2, num_classes)
+        else:
+            self.fc = nn.Linear(512 * block.expansion, num_classes)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -169,9 +176,16 @@ class ResNet(nn.Module):
 
         _, view_pool = self.features(x)
 
-        pooled_view = view_pool[0]
-        for i in range(1, len(view_pool)):
-            pooled_view = torch.max(pooled_view, view_pool[i])
+        if self.multiview_model_type == 'pooling':
+            pooled_view = view_pool[0]
+            for i in range(1, len(view_pool)):
+                pooled_view = torch.max(pooled_view, view_pool[i])
+        elif self.multiview_model_type == 'cat':
+            pooled_view = torch.cat(view_pool, dim=1)
+        elif self.multiview_model_type == 'projection':
+            pass
+        else:
+            raise RuntimeError('multiview_model_type not supported')
 
         pooled_view = self.fc(pooled_view)
 

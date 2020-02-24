@@ -19,8 +19,13 @@ from shutil import copy
 import torch
 from torchvision import datasets, transforms
 
-from utils import classifier_dataloader
+# from utils import classifier_dataloader
 
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# classes = ['No Finding', 'Enlarged Cardiomediastinum', 'Cardiomegaly', 'Lung Opacity', 'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 'Pleural Effusion', 'Pleural Other', 'Fracture']
+classes = ['No Finding', 'Cardiomegaly', 'Lung Opacity', 'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 'Pleural Effusion', 'Pleural Other', 'Fracture']
 
 def prepare_multiview_data(in_csv, out_dir, class_label, mode):
     with open('%s/%s.csv' % (in_csv, mode), 'r') as csv_file:
@@ -86,7 +91,45 @@ def prepare_multiview_data(in_csv, out_dir, class_label, mode):
                     raise RuntimeError('invalid view')
 
 
-def get_data_statistics(dataset, task):
+def prepare_singleview_data(in_csv, out_dir, class_label, mode):
+    with open('%s/%s.csv' % (in_csv, mode), 'r') as csv_file:
+
+        # get column name
+        column_name = csv_file.readline().split(',')
+        # print(column_name)
+
+        # get column index of class label
+        class_idx = column_name.index(class_label)
+
+        samples = 0
+        for line in csv_file:
+            sample = line.split(',')
+
+            if (sample[class_idx] == '1.0') or (sample[class_idx] == '0.0'):
+
+                samples = samples + 1
+
+                # print('Found one {} sample {}'.format(label, save_path))
+                if samples % 1000 == 0:
+                    print('Found {} samples'.format(samples))
+
+                label = int(float(sample[class_idx]))
+
+                save_path = '%s/%s_%s/%d' % (out_dir, class_label.lower().replace(' ', '_'), mode, label)
+                if not os.path.exists(save_path):
+                    os.makedirs(save_path)
+
+                # path = '../data/' + sample[column_name.index('Path')]
+                # path_list = path.split('/')
+                # path_list[-1] = '%d.jpg' % samples
+
+                try:
+                    copy('../data/' + sample[column_name.index('Path')], '%s/%s.jpg' % (save_path, samples))
+                except:
+                    continue
+
+
+def get_multiview_data_statistics(dataset, task):
     data_path = '../data/%s/%s_training' % (dataset, task)
 
     """compute image data statistics (mean, std)"""
@@ -131,5 +174,56 @@ def get_data_statistics(dataset, task):
     return pop_mean, pop_std0, pop_std1
 
 
-# prepare_multiview_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert', class_label='Consolidation', mode='validation')
-get_data_statistics('chexpert', 'consolidation')
+def get_singleview_data_statistics(dataset, task):
+    data_path = '../data/%s/%s_training' % (dataset, task)
+
+    """compute image data statistics (mean, std)"""
+    data_transform = transforms.Compose([transforms.Resize(size=(224, 224)),
+                                         transforms.ToTensor()])
+
+    train_data = datasets.ImageFolder(root=data_path, transform=data_transform)
+
+    train_loader = torch.utils.data.DataLoader(
+        train_data,
+        batch_size=4096,
+        num_workers=4,
+        shuffle=False
+    )
+
+    pop_mean = []
+    pop_std0 = []
+    pop_std1 = []
+    for i, data in enumerate(train_loader, 0):
+        # shape (batch_size, 3, height, width)
+        images, labels = data
+        numpy_image = np.asarray([item.numpy() for item in images])
+
+        # shape (3,)
+        batch_mean = np.mean(numpy_image, axis=(0, 2, 3))
+        batch_std0 = np.std(numpy_image, axis=(0, 2, 3))
+        batch_std1 = np.std(numpy_image, axis=(0, 2, 3), ddof=1)
+
+        pop_mean.append(batch_mean)
+        pop_std0.append(batch_std0)
+        pop_std1.append(batch_std1)
+
+    # shape (num_iterations, 3) -> (mean across 0th axis) -> shape (3,)
+    pop_mean = np.array(pop_mean).mean(axis=0)
+    pop_std0 = np.array(pop_std0).mean(axis=0)
+    pop_std1 = np.array(pop_std1).mean(axis=0)
+
+    print(pop_mean)
+    print(pop_std0)
+
+    return pop_mean, pop_std0, pop_std1
+
+
+# prepare_multiview_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert_multiview', class_label='Consolidation', mode='validation')
+# get_multiview_data_statistics('chexpert_multiview', 'consolidation')
+
+# prepare_singleview_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert', class_label='Enlarged Cardiomediastinum', mode='training')
+# get_singleview_data_statistics('chexpert', 'enlarged_cardiomediastinum')
+
+for c in classes:
+    print('processing %s...' % c)
+    prepare_singleview_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert', class_label=c, mode='training')

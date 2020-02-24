@@ -56,7 +56,7 @@ def ind_eval_io(args, cnn, test_loader):
     print(df)
 
 
-def ood_eval_io(args, cnn, train_loader, test_loader, ood_loader, classes, ood_method='ODIN'):
+def ood_eval_io(args, cnn, train_loader, test_loader, ood_loader, classes, ood_method='ODIN', ood_gradcam=False):
     """OOD test function"""
 
     # test OOD performance
@@ -66,3 +66,6 @@ def ood_eval_io(args, cnn, train_loader, test_loader, ood_loader, classes, ood_m
 
     df = pd.DataFrame(ood_performance.items(), columns=["metric", "result"])
     print(df)
+
+    # print values for paper writing
+    print(ood_performance.values())

@@ -19,11 +19,13 @@ class _BaseWrapper(object):
     Please modify forward() and backward() according to your task.
     """
 
-    def __init__(self, model):
+    def __init__(self, model, perturb_magnitude=0.0):
         super(_BaseWrapper, self).__init__()
         self.device = next(model.parameters()).device
         self.model = model
         self.handlers = []  # a set of hook function handlers
+
+        self.perturb_magnitude = perturb_magnitude
 
     def _encode_one_hot(self, ids):
         one_hot = torch.zeros_like(self.logits).to(self.device)
@@ -34,10 +36,33 @@ class _BaseWrapper(object):
         """
         Simple classification
         """
-        self.model.zero_grad()
-        self.logits = self.model(image)
-        self.probs = F.softmax(self.logits, dim=1)
-        return self.probs.sort(dim=1, descending=True)
+        self.model.eval()
+
+        if self.perturb_magnitude == 0.0:
+            self.model.zero_grad()
+            self.logits = self.model(image)
+            self.probs = F.softmax(self.logits, dim=1)
+
+            return image, self.probs.sort(dim=1, descending=True)
+        else:
+            image = image.requires_grad_(True)
+
+            org_logits = self.model(image)
+            probs = F.softmax(org_logits, dim=1)
+            score, _ = probs.max(dim=1)
+
+            loss = -score.mean()
+            loss.backward()
+
+            gradient = torch.ge(image.grad.data, 0)
+            gradient = (gradient.float() - 0.5) * 2
+            perturbed_image = torch.add(image.detach(), -self.perturb_magnitude, gradient)
+
+            self.model.zero_grad()
+            self.logits = self.model(perturbed_image)
+            self.probs = F.softmax(self.logits, dim=1)
+
+            return perturbed_image, self.probs.sort(dim=1, descending=True)
 
     def backward(self, ids):
         """
@@ -50,6 +75,7 @@ class _BaseWrapper(object):
 
         one_hot = self._encode_one_hot(ids)
         self.logits.backward(gradient=one_hot, retain_graph=True)
+        # (self.logits * one_hot).sum().backward(retain_graph=True)
 
     # def generate(self):
     #     raise NotImplementedError
@@ -118,11 +144,13 @@ class GradCAM(_BaseWrapper):
     Look at Figure 2 on page 4
     """
 
-    def __init__(self, model, candidate_layers=None):
+    def __init__(self, model, perturb_magnitude=0.0, candidate_layers=None):
         super(GradCAM, self).__init__(model)
         self.fmap_pool = OrderedDict()
         self.grad_pool = OrderedDict()
         self.candidate_layers = candidate_layers  # list
+
+        self.perturb_magnitude = perturb_magnitude
 
         # self.grad_list = []
         # def print_grad(grad):
@@ -130,7 +158,7 @@ class GradCAM(_BaseWrapper):
 
         def forward_hook(key):
             def forward_hook_(module, input, output):
-                # Save featuremaps
+                # Save feature maps
                 self.fmap_pool.setdefault(key, []).append(output.detach())
                 # self.fmap_pool[key] = output.detach()
 
@@ -138,7 +166,7 @@ class GradCAM(_BaseWrapper):
 
         def backward_hook(key):
             def backward_hook_(module, grad_in, grad_out):
-                # Save the gradients correspond to the featuremaps
+                # Save the gradients correspond to the feature maps
                 self.grad_pool.setdefault(key, []).append(grad_out[0].detach())
                 # self.grad_pool[key] = grad_out[0].detach()
 
@@ -170,8 +198,11 @@ class GradCAM(_BaseWrapper):
         return super(GradCAM, self).forward(image)
 
     def generate_base(self, target_layer):
-        fmaps = self._find(self.fmap_pool, target_layer)[0]
-        grads = self._find(self.grad_pool, target_layer)[0]
+        # fmaps = self._find(self.fmap_pool, target_layer)[0]
+        # grads = self._find(self.grad_pool, target_layer)[0]
+
+        fmaps = torch.cat(self._find(self.fmap_pool, target_layer), dim=0)
+        grads = torch.cat(self._find(self.grad_pool, target_layer), dim=0)
         weights = self._compute_grad_weights(grads)
 
         gcam = torch.mul(fmaps.cuda(), weights.cuda()).sum(dim=1, keepdim=True)

@@ -3,9 +3,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions import Categorical
 
 import numpy as np
 from sklearn import metrics
+import copy
+import os
+
 from metrics.ood import tnr_at_tpr95, detection, AverageMeter
 from utils.misc import cov
 
@@ -21,6 +25,8 @@ class Baseline(object):
 
         self.prepare(train_loader, val_loader)
         self.in_domain_scores = self.get_scores(val_loader)
+
+        self.perturb_magnitude = 0.0
 
     def prepare(self, train_loader, val_loader):
         return
@@ -41,7 +47,7 @@ class Baseline(object):
         for input, target in dataloader:
 
             input = input.cuda()
-            target = target.cuda()
+            # target = target.cuda()
 
             if 'cosine' in self.config.model_type:
                 # get features before last layer for Mahalanobis methods
@@ -81,6 +87,14 @@ class Baseline(object):
                 'score_avg(\u2191)': '{:.2e}'.format(score_out.mean()),
                 'score_std(\u2193)': '{:.2e}'.format(score_out.std())
                 }
+
+    def get_ood_model(self, ood_model_file=None):
+        self.ood_cnn = copy.deepcopy(self.cnn)
+
+    def prepare_ood(self, ood_model_file=None):
+        self.get_ood_model(ood_model_file)
+
+        return self.ood_cnn, self.perturb_magnitude
 
 
 class InputPreProcess(Baseline):
@@ -149,24 +163,24 @@ class InputPreProcess(Baseline):
 
 
 class ODIN(InputPreProcess):
-    def get_scores(self, dataloader):
-        self.cnn.eval()
-        scores = []
-        for input, target in dataloader:
-
-            input = input.cuda()
-            target = target.cuda()
-
-            if 'cosine' in self.config.model_type:
-                output, _, _ = self.cnn.forward(input)
-            else:
-                output = self.cnn.forward(input)
-
-            score = self.scoring(output)
-
-            scores.extend(score.cpu().detach().numpy())
-
-        return scores
+    # def get_scores(self, dataloader):
+    #     self.cnn.eval()
+    #     scores = []
+    #     for input, target in dataloader:
+    #
+    #         input = input.cuda()
+    #         target = target.cuda()
+    #
+    #         if 'cosine' in self.config.model_type:
+    #             output, _, _ = self.cnn.forward(input)
+    #         else:
+    #             output = self.cnn.forward(input)
+    #
+    #         score = self.scoring(output)
+    #
+    #         scores.extend(score.cpu().detach().numpy())
+    #
+    #     return scores
 
     # Temperature scaling + Input preprocess
     def scoring(self, x):
@@ -183,6 +197,7 @@ class ODIN(InputPreProcess):
 
 class Mahalanobis(Baseline):
     def prepare(self, train_loader, val_loader):
+        self.ood_cnn = copy.deepcopy(self.cnn)
         self.init_mahalanobis(train_loader)
 
     def init_mahalanobis(self, dataloader):
@@ -238,9 +253,31 @@ class Mahalanobis(Baseline):
 
         return score
 
+    def get_ood_model(self, ood_model_file=None):
+
+        print('Preparing Mahalanobis OOD Model...')
+
+        if (ood_model_file is not None) and (os.path.isfile(ood_model_file)):
+            self.ood_cnn.load_state_dict(torch.load(ood_model_file))
+        else:
+            with torch.no_grad():
+                # set weight, bias in fc layer
+                new_weight = self.ood_cnn.module.fc.weight
+                new_bias = self.ood_cnn.module.fc.bias
+
+                for i in range(self.num_classes):
+                    center = self.centers[i].unsqueeze(dim=1)
+
+                    new_weight[i] = torch.mm(center.t(), self.precision)
+                    new_bias[i] = -0.5 * torch.mm(torch.mm(center.t(), self.precision), center).diag()
+
+                self.ood_cnn.module.fc.weight = torch.nn.Parameter(new_weight)
+                self.ood_cnn.module.fc.bias = torch.nn.Parameter(new_bias)
+
 
 class Mahalanobis_IPP(Mahalanobis, InputPreProcess):
     def prepare(self, train_loader, val_loader):
+        self.ood_cnn = copy.deepcopy(self.cnn)
         self.init_mahalanobis(train_loader)
         self.perturb_magnitude = self.search_perturb_magnitude(val_loader)
         print('Inputs are perturbed with magnitude', self.perturb_magnitude)
@@ -262,6 +299,7 @@ class DeepMahalanobis(Baseline):
         input, _ = dataloader.dataset[0]
         input = input.unsqueeze(0).cuda()
 
+        # get all features (e.g. 4 layer features for resnet)
         feats = self.cnn.forward(input)
 
         self.num_out = len(feats)
@@ -296,21 +334,21 @@ class DeepMahalanobis(Baseline):
             X = feats - torch.index_select(self.centers[i], dim=0, index=all_label)
             self.precision[i] = cov(X).pinverse()
 
-    def get_scores(self, dataloader):
-        self.cnn.eval()
-        scores = []
-        for input, target in dataloader:
-
-            input = input.cuda()
-            target = target.cuda()
-
-            output = self.cnn.forward(input)
-
-            score = self.scoring(output)
-
-            scores.extend(score.cpu().detach().numpy())
-
-        return scores
+    # def get_scores(self, dataloader):
+    #     self.cnn.eval()
+    #     scores = []
+    #     for input, target in dataloader:
+    #
+    #         input = input.cuda()
+    #         target = target.cuda()
+    #
+    #         output = self.cnn.forward(input)
+    #
+    #         score = self.scoring(output)
+    #
+    #         scores.extend(score.cpu().detach().numpy())
+    #
+    #     return scores
 
     def scoring(self, x):
         deep_scores = torch.zeros(x[0].size(0), self.num_out, device=x[0].device)

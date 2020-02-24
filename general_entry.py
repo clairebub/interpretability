@@ -22,7 +22,7 @@ import ntpath
 from utils import resource_allocation
 
 """restrict GPU option"""
-# find most open GPU (default use 4 gpus)
+# find most open GPU (default use 8 gpus)
 gpu_list = resource_allocation.get_default_gpus(8)
 gpu_ids = ','.join(map(str, gpu_list))
 
@@ -43,16 +43,20 @@ from torch.autograd import Variable
 from torch.optim.lr_scheduler import MultiStepLR
 from torchvision import datasets, transforms
 
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 from data_processing import mrnet
 
 from utils import optimizer, classifier_dataloader
 
-from models.classifier import ensemble_resnets, ensemble_cosine_resnets, resnet, cosine_resnet
-from models.multiview_classifier import mvresnet, mvcnn
+from models.classification import ensemble_resnets, resnet, densenet, cosine_resnet
+from models.multiview_classification import mvresnet, mvcnn
 
 from evaluation.ind_classification import ind_eval
 from evaluation.eval_classification import ind_eval_io, ood_eval_io
 from evaluation.eval_segmentation import segmentation_eval, segmentation_eval_each
+from evaluation import ood_detection
 
 from gradcam.entry import base_cam, ensemble_cam, multiview_cam
 
@@ -60,24 +64,29 @@ from gradcam.entry import base_cam, ensemble_cam, multiview_cam
 dataset_options = ['isic2019', 'cifar10', 'cifar100', 'fashioniq2019', 'mrnet']
 task_options = ['skin', 'age_approx', 'anatom_site_general', 'sex', 'general']
 model_options = ['densenet121', 'densenet161', 'densenet169', 'densenet201', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'resnext101_32x8d', 'vgg13', 'vgg16']
-model_type_options = ['base', 'cosine', 'ensemble', 'ensemble_cosine']
+model_type_options = ['base', 'cosine', 'ensemble', 'ensemble_cosine', 'multiview_pooling', 'multiview_cat']
 # optim_options = ['SGD', 'Adam', 'RMSprop']
 optim_options = ['SGD']
-ood_dataset = ['tinyImageNet_resize', 'LSUN_resize', 'iSUN', 'cifar10', 'cifar100', 'svhn']
-ood_options = ['Baseline', 'ODIN', 'Mahalanobis', 'Mahalanobis_IPP', 'DeepMahalanobis', 'DeepMahalanobis_IPP']
+ood_dataset = ['isic', 'isic_ind', 'tinyImageNet_resize', 'LSUN_resize', 'iSUN', 'cifar10', 'cifar100', 'svhn']
+# ood_options = ['Baseline', 'InputPreProcess', 'ODIN', 'Mahalanobis', 'Mahalanobis_IPP', 'DeepMahalanobis', 'DeepMahalanobis_IPP']
+ood_options = ['ODIN', 'Mahalanobis_IPP', 'Baseline', 'InputPreProcess']
 
 parser = argparse.ArgumentParser(description='train_model')
 
 parser.add_argument('--gpu_no', type=int, default=8)
-# parser.add_argument('--task', default='skin', choices=task_options)
-# parser.add_argument('--dataset', default='isic2019', choices=dataset_options)
-# parser.add_argument('--model', default='resnet18', choices=model_options)
-# parser.add_argument('--model_type', default='base', choices=model_type_options)
+
+parser.add_argument('--dataset', default='isic2019', choices=dataset_options)
+parser.add_argument('--sub_dataset', default='skin', choices=task_options)
+
+parser.add_argument('--model', default='resnet152', choices=model_options)
+parser.add_argument('--model_type', default='base', choices=model_type_options)
 parser.add_argument('--ensemble_models', nargs="+", type=float, default=['resnet18', 'resnet34'])
-parser.add_argument('--task', default='pleural_effusion', choices=task_options)
-parser.add_argument('--dataset', default='chexpert', choices=dataset_options)
-parser.add_argument('--model', default='mvresnet34', choices=model_options)
-parser.add_argument('--model_type', default='multiview', choices=model_type_options)
+# parser.add_argument('--dataset', default='chexpert', choices=dataset_options)
+# parser.add_argument('--sub_dataset', default='enlarged_cardiomediastinum', choices=task_options)
+# parser.add_argument('--model', default='mvresnet34', choices=model_options)
+# parser.add_argument('--model_type', default='multiview_cat', choices=model_type_options)
+# # parser.add_argument('--multiview_model_type', default='pooling', choices=model_type_options)
+
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--epochs', type=int, default=150)
 parser.add_argument('--valid_steps', type=int, default=1)
@@ -89,8 +98,10 @@ parser.add_argument('--learning_rate', type=float, default=0.001)
 # default: no doing any of these
 parser.add_argument('--train', action='store_true')
 parser.add_argument('--test', action='store_true')
+parser.add_argument('--save_all_models', action='store_true')
 
 parser.add_argument('--gradcam', action='store_true')
+parser.add_argument('--ood_gradcam', action='store_true')
 parser.add_argument('--test_gradcam', action='store_true')
 parser.add_argument('--gradcam_conf', type=float, default=0.95)
 parser.add_argument('--gradcam_threshold', type=float, default=0.6)
@@ -105,9 +116,11 @@ parser.add_argument('--validation', action='store_true')
 parser.add_argument('--pretrained', action='store_true')
 
 parser.add_argument('--test_ood', action='store_true')
-parser.add_argument('--ood_dataset', default='LSUN_resize', choices=ood_dataset)
+parser.add_argument('--ood_dataset', default='isic', choices=ood_dataset)
 parser.add_argument('--ood_method', default='all', choices=ood_options)
 parser.add_argument('--data_perturb_magnitude', nargs="+", type=float, default=[0.01])
+
+parser.add_argument('--best_model', type=int, default=-1)
 
 # get and show input arguments
 args = parser.parse_args()
@@ -121,17 +134,17 @@ if args.gpu_no == 0:
 else:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# should make training should go faster for large models
+# should make training faster for large models
 cudnn.benchmark = True
 
 np.random.seed(0)
 torch.cuda.manual_seed(args.seed)
 
 """define a universal filename"""
-folder_name = "classification/" + args.model_type + '_' + args.task
+folder_name = args.model_type + '_' + args.sub_dataset
 
 filename = args.dataset + '_' \
-           + args.task + '_' \
+           + args.sub_dataset + '_' \
            + ('aug' if args.train_augmentation else 'noaug') + '_' \
            + args.model_type + '_' \
            + (''.join(args.ensemble_models) if args.model_type == 'ensemble' else args.model) + '_' \
@@ -140,13 +153,13 @@ filename = args.dataset + '_' \
            + ('' if args.validation else '_full')
 
 # initialize tensorboard writer
-tensorboard_path = 'logs/%s/%s/%s' % (args.dataset, folder_name, filename)
+tensorboard_path = 'logs/classification/%s/%s/%s' % (args.dataset, folder_name, filename)
 if not os.path.exists(tensorboard_path):
     os.makedirs(tensorboard_path)
 tb_writer = SummaryWriter(tensorboard_path)
 
 # initialize log file
-logging.basicConfig(filename='logs/%s/%s/%s.log' % (args.dataset, folder_name, filename), level=logging.DEBUG)
+logging.basicConfig(filename='logs/classification/%s/%s/%s.log' % (args.dataset, folder_name, filename), level=logging.DEBUG)
 
 """data loading"""
 
@@ -154,7 +167,7 @@ logging.basicConfig(filename='logs/%s/%s/%s.log' % (args.dataset, folder_name, f
 with open('data_processing/data_statistics.json') as json_file:
     data = json.load(json_file)
 
-    entry = '%s_%s' % (args.dataset, args.task)
+    entry = '%s_%s' % (args.dataset, args.sub_dataset)
     mean = data[entry]['mean']
     std = data[entry]['std']
 
@@ -163,30 +176,30 @@ with open('data_processing/data_statistics.json') as json_file:
 # data normalization
 normalize = transforms.Normalize(mean=mean, std=std)
 
-if args.model_type == 'multiview':
+# load train data
+if args.train_augmentation:
+    train_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.RandomResizedCrop(224),
+        transforms.ColorJitter(brightness=0.05, contrast=0.05, saturation=0.05, hue=0.05),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(10),
+        transforms.ToTensor(),
+        normalize
+    ])
+else:
+    train_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize
+    ])
 
-    # load train data
-    if args.train_augmentation:
-        train_transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.RandomResizedCrop(224),
-            transforms.ColorJitter(brightness=0.05, contrast=0.05, saturation=0.05, hue=0.05),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomVerticalFlip(),
-            transforms.RandomRotation(10),
-            transforms.ToTensor(),
-            normalize
-        ])
-    else:
-        train_transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
-        ])
+if 'multiview' in args.model_type:
 
-    train_data = classifier_dataloader.MultiViewDataSet(root='data/%s/%s_training%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=train_transform)
+    train_data = classifier_dataloader.MultiViewDataSet(root='data/%s/%s_training%s' % (args.dataset, args.sub_dataset, '' if args.validation else '_full'), transform=train_transform)
 
     train_loader = torch.utils.data.DataLoader(dataset=train_data,
                                                batch_size=args.batch_size,
@@ -200,7 +213,7 @@ if args.model_type == 'multiview':
         normalize
     ])
 
-    valid_data = classifier_dataloader.MultiViewDataSet(root='data/%s/%s_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=valid_transform)
+    valid_data = classifier_dataloader.MultiViewDataSet(root='data/%s/%s_validation%s' % (args.dataset, args.sub_dataset, '' if args.validation else '_full'), transform=valid_transform)
 
     valid_loader = torch.utils.data.DataLoader(dataset=valid_data,
                                                batch_size=args.batch_size,
@@ -211,29 +224,8 @@ if args.model_type == 'multiview':
 else:
 
     # load training data
-    if 'isic' in args.dataset:
-        if args.train_augmentation:
-            train_transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.RandomResizedCrop(224),
-                transforms.ColorJitter(brightness=0.05, contrast=0.05, saturation=0.05, hue=0.05),
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-                transforms.RandomRotation(10),
-                transforms.ToTensor(),
-                normalize
-            ])
-        else:
-            train_transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                normalize
-            ])
 
-        train_data = datasets.ImageFolder(root='data/%s/%s_training%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=train_transform)
-    elif args.dataset == 'mrnet':
+    if args.dataset == 'mrnet':
         train_data, valid_data = mrnet.load_data()
     elif args.dataset == 'cifar10':
         if args.train_augmentation:
@@ -266,7 +258,27 @@ else:
 
         train_data = datasets.CIFAR100(root='data/standard/', train=True, transform=train_transform, download=False)
     else:
-        raise RuntimeError('Training dataset not available')
+        if args.train_augmentation:
+            train_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.RandomResizedCrop(224),
+                transforms.ColorJitter(brightness=0.05, contrast=0.05, saturation=0.05, hue=0.05),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.RandomRotation(10),
+                transforms.ToTensor(),
+                normalize
+            ])
+        else:
+            train_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize
+            ])
+
+        train_data = datasets.ImageFolder(root='data/%s/%s_training%s' % (args.dataset, args.sub_dataset, '' if args.validation else '_full'), transform=train_transform)
 
     train_loader = torch.utils.data.DataLoader(dataset=train_data,
                                                batch_size=args.batch_size,
@@ -279,40 +291,45 @@ else:
         normalize,
     ])
 
-    if 'isic' in args.dataset:
-        valid_transform = transforms.Compose([
-            transforms.Resize(size=(224, 224)),
-            transforms.ToTensor(),
-            normalize
-        ])
-
-        valid_data = datasets.ImageFolder(root='data/%s/%s_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'), transform=valid_transform)
-    elif args.dataset == 'mrnet':
+    if args.dataset == 'mrnet':
         pass
     elif args.dataset == 'cifar10':
         valid_data = datasets.CIFAR10(root='data/standard/', train=False, transform=train_transform, download=True)
     elif args.dataset == 'cifar100':
         valid_data = datasets.CIFAR100(root='data/standard/', train=False, transform=train_transform, download=True)
     else:
-        raise RuntimeError('Valid dataset not available')
+        valid_transform = transforms.Compose([
+            transforms.Resize(size=(224, 224)),
+            transforms.ToTensor(),
+            normalize
+        ])
+
+        valid_data = datasets.ImageFolder(root='data/%s/%s_validation%s' % (args.dataset, args.sub_dataset, '' if args.validation else '_full'), transform=valid_transform)
 
     valid_loader = torch.utils.data.DataLoader(dataset=valid_data,
                                                batch_size=args.batch_size,
                                                shuffle=False,
                                                num_workers=16)
 
-    valid_data_balanced = None
-    if args.validation and os.path.exists('data/%s/%s_validation_balanced' % (args.dataset, args.task)):
-        valid_data_balanced = datasets.ImageFolder(root='data/%s/%s_validation_balanced' % (args.dataset, args.task), transform=valid_transform)
+    valid_data_balanced, valid_balanced_loader = None, None
+    if args.validation and os.path.exists('data/%s/%s_validation_balanced' % (args.dataset, args.sub_dataset)):
+        valid_data_balanced = datasets.ImageFolder(root='data/%s/%s_validation_balanced' % (args.dataset, args.sub_dataset), transform=valid_transform)
         valid_balanced_loader = torch.utils.data.DataLoader(dataset=valid_data_balanced,
                                                             batch_size=args.batch_size,
                                                             shuffle=False,
                                                             num_workers=16)
 
     # load ood data
+
+    # run for each ood method
+    if args.ood_method != 'all':
+        ood_methods = [args.ood_method]
+    else:
+        ood_methods = ood_options
+
     if args.test_ood:
         if args.ood_dataset == 'isic':
-            ood_dataset = datasets.ImageFolder(root='data/standard/isic', transform=valid_transform)
+            ood_dataset = datasets.ImageFolder(root='data/isic2019/%s_ood' % args.sub_dataset, transform=valid_transform)
         elif args.ood_dataset == 'tinyImageNet_resize':
             ood_dataset = datasets.ImageFolder(root='data/standard/TinyImagenet_resize', transform=valid_transform)
         elif args.ood_dataset == 'LSUN_resize':
@@ -341,7 +358,10 @@ num_classes = len(train_data.classes)
 # model architecture selection
 if args.model_type == 'base':
     if 'resnet' in args.model:
-        cnn = resnet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes)
+        cnn = resnet.__dict__[args.model](pretrained=args.pretrained, num_classes=1000)
+        # cnn = resnet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes)
+    elif 'densenet' in args.model:
+        cnn = densenet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes)
     else:
         cnn = ml.__dict__[args.model](pretrained=args.pretrained)
 elif args.model_type == 'cosine':
@@ -355,7 +375,7 @@ elif 'ensemble' in args.model_type:
 
     for ensemble_model in args.ensemble_models:
         ensemble_model_checkpoint = args.dataset + '_' \
-                                    + args.task + '_' \
+                                    + args.sub_dataset + '_' \
                                     + ('aug' if args.train_augmentation else 'noaug') + '_' \
                                     + args.model_type + '_' \
                                     + ensemble_model + '_' \
@@ -366,14 +386,16 @@ elif 'ensemble' in args.model_type:
         print('Loading pretrained %s model...' % ensemble_model)
 
         cnn_en = nn.DataParallel(resnet.__dict__[ensemble_model](pretrained=args.pretrained, num_classes=num_classes))
-        cnn_en.load_state_dict(torch.load('checkpoints/classification/%s/base_%s/%s.pt' % (args.dataset, args.task, ensemble_model_checkpoint)))
+        cnn_en.load_state_dict(torch.load('checkpoints/classification/%s/base_%s/%s.pt' % (args.dataset, args.sub_dataset, ensemble_model_checkpoint)))
 
         single_nets.append(cnn_en)
 
     cnn = ensemble_model_lookup[len(args.ensemble_models)](single_nets, num_classes)
 
-elif args.model_type == 'multiview':
-    cnn = mvresnet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes)
+elif 'multiview' in args.model_type:
+    multiview_model_type = args.model_type.split('_')[-1]
+
+    cnn = mvresnet.__dict__[args.model](pretrained=args.pretrained, num_classes=num_classes, multiview_model_type=multiview_model_type)
 else:
     raise RuntimeError('customized model not supported')
 
@@ -389,7 +411,11 @@ cnn = nn.DataParallel(cnn)
 if not os.path.exists('checkpoints'):
     os.makedirs('checkpoints')
 
-model_file = 'checkpoints/classification/%s/%s/%s.pt' % (args.dataset, folder_name, filename)
+if args.best_model == -1:
+    model_file = 'checkpoints/classification/%s/%s/%s.pt' % (args.dataset, folder_name, filename)
+else:
+    model_file = 'checkpoints/classification/%s/%s/%s_%d.pt' % (args.dataset, folder_name, filename, args.best_model)
+
 if os.path.isfile(model_file):
     pretrained_dict = torch.load(model_file)
     cnn.load_state_dict(pretrained_dict)
@@ -447,7 +473,7 @@ def train():
         for i, (images, labels) in enumerate(progress_bar):
             progress_bar.set_description('Epoch ' + str(epoch))
 
-            if args.model_type == 'multiview':
+            if 'multiview' in args.model_type:
                 images = torch.stack(images, dim=1)
 
             images = Variable(images).to(device)
@@ -466,9 +492,9 @@ def train():
             # make sure we don't have any numerical instability
             eps = 1e-12
             pred_original = torch.clamp(pred_original, 0. + eps, 1. - eps)
-            pred_new = torch.log(pred_original)
+            pred = torch.log(pred_original)
 
-            xentropy_loss = prediction_criterion(pred_new, labels)
+            xentropy_loss = prediction_criterion(pred, labels)
 
             xentropy_loss.backward()
             cnn_optimizer.step()
@@ -528,15 +554,20 @@ def train():
             logging.info(row)
 
         # save model
+        if args.save_all_models:
+            torch.save(cnn.state_dict(), 'checkpoints/classification/%s/%s/%s_%d.pt' % (args.dataset, folder_name, filename, epoch))
+
         torch.save(cnn.state_dict(), 'checkpoints/classification/%s/%s/%s.pt' % (args.dataset, folder_name, filename))
 
 
-def test(test_data_loader):
+def test():
 
     print('\n%s\n' % filename)
 
-    """test ind performance"""
-    ind_eval_io(args, cnn, test_data_loader)
+    # """test ind performance"""
+    ind_eval_io(args, cnn, valid_loader)
+    if valid_balanced_loader is not None:
+        ind_eval_io(args, cnn, valid_balanced_loader)
 
     """test ood performance"""
     if args.test_ood:
@@ -548,7 +579,7 @@ def test(test_data_loader):
         # test ood
         for ood_method in ood_methods:
             print('\n[%s] ' % ood_method, end='')
-            ood_eval_io(args, cnn, train_loader, test_data_loader, ood_loader, classes, ood_method=ood_method)
+            ood_eval_io(args, cnn, train_loader, valid_loader, ood_loader, classes, ood_method=ood_method)
 
 
 if args.train:
@@ -556,37 +587,48 @@ if args.train:
 else:
     # run test
     if args.test:
-
-        # original test/val data
-        test(valid_loader)
-
-        # # balanced test/val data
-        # if valid_balanced_loader is not None:
-        #     run_test(valid_balanced_loader)
+        test()
 
     # run grad-cam
-    gradcam_result_path = 'results/grad_cam/{}/{}/{}/{}_{}'.format(args.dataset, folder_name, filename, args.gradcam_conf, args.gradcam_threshold)
+    segmentation_valid_path = 'data/%s/%s_segmentation_validation%s' % (args.dataset, args.sub_dataset, '' if args.validation else '_full')
+
+    if os.path.exists(segmentation_valid_path):
+        # prepare for segmentation test
+
+        if args.best_model == -1:
+            gradcam_result_path = 'results/grad_cam/{}/{}/{}/{}_{}'.format(args.dataset, folder_name, filename, args.gradcam_conf, args.gradcam_threshold)
+        else:
+            gradcam_result_path = 'results/grad_cam/{}/{}/{}_{}/{}_{}'.format(args.dataset, folder_name, filename, args.best_model, args.gradcam_conf, args.gradcam_threshold)
+    else:
+        # no need segmentation test
+
+        if args.best_model == -1:
+            gradcam_result_path = 'results/grad_cam/{}/{}/{}'.format(args.dataset, folder_name, filename)
+        else:
+            gradcam_result_path = 'results/grad_cam/{}/{}/{}_{}'.format(args.dataset, folder_name, filename, args.best_model)
+
+        segmentation_valid_path = 'data/%s/%s_validation%s' % (args.dataset, args.sub_dataset, '' if args.validation else '_full')
+
     if args.gradcam:
 
         if not os.path.exists(gradcam_result_path):
             os.makedirs(gradcam_result_path)
 
         # load new validation data
-        if args.model_type == 'multiview':
-            valid_data = classifier_dataloader.MultiViewDataSetWithPaths(root='data/%s/%s_segmentation_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'),
-                                                                         transform=valid_transform)
+        if 'multiview' in args.model_type:
+            gradcam_dataset = classifier_dataloader.MultiViewDataSetWithPaths(root=segmentation_valid_path, transform=valid_transform)
         else:
-            valid_data = classifier_dataloader.ImageFolderWithPaths(root='data/%s/%s_segmentation_validation%s' % (args.dataset, args.task, '' if args.validation else '_full'),
-                                                                    transform=valid_transform)
+            gradcam_dataset = classifier_dataloader.ImageFolderWithPaths(root=segmentation_valid_path, transform=valid_transform)
+            # valid_data = classifier_dataloader.ImageFolderWithPaths(root='data/isic2019/%s_ood' % args.sub_dataset, transform=valid_transform)
 
-        valid_loader = torch.utils.data.DataLoader(dataset=valid_data,
-                                                   batch_size=1,
-                                                   shuffle=False,
-                                                   num_workers=16)
+        gradcam_loader = torch.utils.data.DataLoader(dataset=gradcam_dataset,
+                                                     batch_size=4096,
+                                                     shuffle=False,
+                                                     num_workers=16)
 
-        for image_batch, label_batch, path_batch in valid_loader:
+        for image_batch, label_batch, path_batch in gradcam_loader:
 
-            if args.model_type == 'multiview':
+            if 'multiview' in args.model_type:
                 path_token = path_batch[0][0].split('/')
 
                 # skip if already processed the first view (others by default)
@@ -594,7 +636,7 @@ else:
                     multiview_cam(image_batch, label_batch, path_batch, cnn, gradcam_result_path, args.gradcam_conf, args.gradcam_threshold)
             else:
                 # skip if already processed
-                if not os.path.exists('%s/%s' % (gradcam_result_path, ntpath.basename(path_batch[0]))):
+                if not os.path.exists('%s/%s' % (gradcam_result_path, ntpath.basename(path_batch[0]).replace('jpg', 'png'))):
                     label_batch = torch.unsqueeze(label_batch, dim=1)
 
                     if args.model_type == 'base':
@@ -604,17 +646,52 @@ else:
                     else:
                         raise RuntimeError('customized model not supported')
 
+    # run ood_gradcam
+    if args.ood_gradcam:
+
+        for ood_method in ood_methods:
+            print('[%s]' % ood_method)
+
+            gradcam_ood_result_path = 'results/grad_cam/{}/{}/{}/{}/{}/{}_{}'.format(args.dataset, folder_name, args.ood_dataset, ood_method, filename, args.gradcam_conf, args.gradcam_threshold)
+            if not os.path.exists(gradcam_ood_result_path):
+                os.makedirs(gradcam_ood_result_path)
+
+            ood_method = ood_detection.__dict__[ood_method](args, cnn, train_loader, valid_loader, len(classes))
+            ood_cnn, perturb_magnitude = ood_method.prepare_ood()
+
+            if args.ood_dataset == 'isic':
+                ood_gradcam_dataset = classifier_dataloader.ImageFolderWithPaths(root='data/isic2019/%s_ood' % args.sub_dataset, transform=valid_transform)
+            elif args.ood_dataset == 'isic_ind':
+                ood_gradcam_dataset = classifier_dataloader.ImageFolderWithPaths(root='data/%s/%s_segmentation_validation%s' % (args.dataset, args.sub_dataset, '' if args.validation else '_full'), transform=valid_transform)
+            elif args.ood_dataset == 'tinyImageNet_resize':
+                ood_gradcam_dataset = classifier_dataloader.ImageFolderWithPaths(root='data/standard/TinyImagenet_resize', transform=valid_transform)
+            elif args.ood_dataset == 'LSUN_resize':
+                ood_gradcam_dataset = classifier_dataloader.ImageFolderWithPaths(root='data/standard/LSUN_resize', transform=valid_transform)
+            elif args.ood_dataset == 'iSUN':
+                ood_gradcam_dataset = classifier_dataloader.ImageFolderWithPaths(root='data/standard/iSUN', transform=valid_transform)
+            else:
+                raise RuntimeError('OOD dataset not available')
+
+            ood_gradcam_loader = torch.utils.data.DataLoader(dataset=ood_gradcam_dataset,
+                                                             batch_size=256,
+                                                             shuffle=False,
+                                                             num_workers=16)
+
+            for image_batch, label_batch, path_batch in ood_gradcam_loader:
+                if not os.path.exists('%s/%s' % (gradcam_ood_result_path, ntpath.basename(path_batch[0]).replace('jpg', 'png'))):
+                    base_cam(list(path_batch), mean, std, label_batch, ood_cnn, gradcam_ood_result_path, args.gradcam_conf, args.gradcam_threshold, perturb_magnitude=perturb_magnitude)
+
     # evaluate gradcam via accuracy
     if args.test_gradcam:
 
-        if args.model_type == 'multiview':
+        if 'multiview' in args.model_type:
 
             valid_gradcam_data = classifier_dataloader.MultiViewDataSet(root=gradcam_result_path, transform=valid_transform)
 
             valid_gradcam_loader = torch.utils.data.DataLoader(dataset=valid_gradcam_data,
-                                                       batch_size=args.batch_size,
-                                                       shuffle=False,
-                                                       num_workers=16)
+                                                               batch_size=args.batch_size,
+                                                               shuffle=False,
+                                                               num_workers=16)
         else:
             raise RuntimeError('model not supported')
 
@@ -622,6 +699,12 @@ else:
 
     # evaluate segmentation results
     if args.test_segmentation:
-        gt_path = 'data/isic2019/skin_segmentation_resized_validation_groundtruth'
+        gt_path = 'data/isic2019/skin_segmentation_validation_groundtruth_resized'
 
-        segmentation_eval(gt_path, gradcam_result_path)
+        # for ood method generated segmentation
+        for ood_method in ood_methods:
+            gradcam_ood_result_path = 'results/grad_cam/{}/{}/{}/{}/{}/{}_{}'.format(args.dataset, folder_name, args.ood_dataset, ood_method, filename, args.gradcam_conf, args.gradcam_threshold)
+            segmentation_eval(gt_path, gradcam_ood_result_path)
+
+        # # for ind method (gradcam) generated segmentation
+        # segmentation_eval(gt_path, gradcam_result_path)

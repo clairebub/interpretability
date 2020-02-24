@@ -110,7 +110,19 @@ def save_sensitivity(filename, maps):
     cv2.imwrite(filename, maps)
 
 
-def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, topk=1, cuda=True):
+def save_image(filename, tensor, de_mean, de_std):
+
+    image = transforms.Compose(
+        [
+            transforms.Normalize(mean=de_mean, std=de_std),
+            transforms.ToPILImage(),
+        ]
+    )(tensor.cpu())
+
+    image.save(filename)
+
+
+def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, topk=1, cuda=True, perturb_magnitude=0.0):
     """Generate Grad-CAM with original models"""
 
     device = get_device(cuda)
@@ -145,8 +157,18 @@ def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, 
     images = torch.stack(images).to(device)
     # labels = labels.to(device)
 
-    gcam = GradCAM(model=cnn)
-    probs, ids = gcam.forward(images)
+    gcam = GradCAM(model=cnn, perturb_magnitude=perturb_magnitude)
+    perturbed_images, (probs, ids) = gcam.forward(images)
+
+    # # save original images and perturbed images
+    # print("Saving resized and perturbed image...")
+    #
+    # de_mean = [-1 * m / s for m, s in zip(mean, std)]
+    # de_std = [1.0 / s for s in std]
+    #
+    # for j in range(len(images)):
+    #     save_image(osp.join(output_dir, "{}.png".format(image_names[j])), images[j], de_mean, de_std)
+    #     save_image(osp.join(output_dir, 'perturbed_{}.png'.format(image_names[j])), perturbed_images[j], de_mean, de_std)
 
     # Grad-CAM
     for target_layer in target_layers:
@@ -162,8 +184,8 @@ def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, 
 
             for j in range(len(images)):
 
-                # copy original image
-                shutil.copy(image_paths[j], output_dir)
+                # # copy original image
+                # shutil.copy(image_paths[j], output_dir)
 
                 print("\t#{}: {} ({:.5f})".format(image_names[j], ids[j, i], probs[j, i]))
 
@@ -171,7 +193,7 @@ def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, 
                     filename=osp.join(
                         output_dir,
                         "{}-gradcam-{}-{}-{}.png".format(
-                            image_names[j], target_layer.replace('module.', ''), labels[j, i], ids[j, i]
+                            image_names[j], target_layer.replace('module.', ''), labels.cpu().detach().numpy()[j], ids[j, i]
                         ),
                     ),
                     gcam=regions[j, 0].cpu().numpy(),
@@ -179,26 +201,26 @@ def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, 
                     paper_cmap=False
                 )
 
-                highlight_gradcam(
-                    filename=osp.join(
-                        output_dir,
-                        "{}_highlight.png".format(image_names[j]),
-                    ),
-                    gcam=regions[j, 0].cpu().numpy(),
-                    raw_image=raw_images[j],
-                    threshold=threshold
-                )
-
-                # ToDo: threshold to be learned
-                if probs[j, i] > conf:
-                    save_segmentation(
-                        filename=osp.join(
-                            output_dir,
-                            "{}_segmentation.png".format(image_names[j]),
-                        ),
-                        gcam=regions[j, 0].cpu().numpy(),
-                        threshold=threshold
-                    )
+                # highlight_gradcam(
+                #     filename=osp.join(
+                #         output_dir,
+                #         "{}_highlight.png".format(image_names[j]),
+                #     ),
+                #     gcam=regions[j, 0].cpu().numpy(),
+                #     raw_image=raw_images[j],
+                #     threshold=threshold
+                # )
+                #
+                # # ToDo: threshold to be learned
+                # if probs[j, i] > conf:
+                #     save_segmentation(
+                #         filename=osp.join(
+                #             output_dir,
+                #             "{}_segmentation.png".format(image_names[j]),
+                #         ),
+                #         gcam=regions[j, 0].cpu().numpy(),
+                #         threshold=threshold
+                #     )
 
 
 def ensemble_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, gradcam_alg='grad_pooling', topk=1, cuda=True):
@@ -274,7 +296,7 @@ def ensemble_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, thresho
 
         probs = probs.cpu().detach().numpy()
         ids = ids.cpu().detach().numpy()
-        regions = regions.cpu().numpy()
+        regions = regions.cpu().detach().numpy()
 
         save_gradcam(
             filename=osp.join(
@@ -353,23 +375,23 @@ def multiview_cam(images, labels, paths, cnn, output_dir, conf, threshold, gradc
                 if not os.path.exists(osp.join(output_dir, sub_path)):
                     os.makedirs(osp.join(output_dir, sub_path))
 
-                # save_gradcam(
-                #     filename=osp.join(
-                #         output_dir,
-                #         sub_path,
-                #         "{}-gradcam-{}-{}-{}.png".format(
-                #             ntpath.basename(view_path), target_layer.replace('module.', ''), labels[j], ids[j, 0]
-                #         ),
-                #     ),
-                #     gcam=regions_views[i][j, 0],
-                #     raw_image=raw_image
-                # )
+                save_gradcam(
+                    filename=osp.join(
+                        output_dir,
+                        sub_path,
+                        "{}-gradcam-{}-{}-{}.png".format(
+                            ntpath.basename(view_path), target_layer.replace('module.', ''), labels[j], ids[j, 0]
+                        ),
+                    ),
+                    gcam=regions_views[i][j, 0],
+                    raw_image=raw_image
+                )
 
                 highlight_gradcam(
                     filename=osp.join(
                         output_dir,
                         sub_path,
-                        ntpath.basename(view_path),
+                        "{}-highlight.png".format(ntpath.basename(view_path)),
                     ),
                     gcam=regions_views[i][j, 0],
                     raw_image=raw_image,

@@ -24,7 +24,7 @@ def ind_eval(args, cnn, data_loader):
 
     for input, target in data_loader:
 
-        if args.model_type == 'multiview':
+        if 'multiview' in args.model_type:
             input = torch.stack(input, dim=1)
 
         input = input.cuda()
