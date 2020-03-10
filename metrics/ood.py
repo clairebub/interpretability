@@ -76,7 +76,11 @@ def tnr_at_tpr95(ind_confidences, ood_confidences):
 
     start = np.min([np.min(X1), np.min(Y1)])
     end = np.max([np.max(X1), np.max(Y1)])
-    gap = (end - start) / 100000
+    gap = (end - start) / 1000000
+
+    print(start)
+    print(end)
+    print(gap)
 
     if gap == 0:
         return 1

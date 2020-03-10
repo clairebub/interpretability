@@ -16,9 +16,13 @@ import numpy as np
 from sklearn.preprocessing import MultiLabelBinarizer
 
 import torch
-from torchvision import datasets, transforms
 from torch.utils.data.dataset import Dataset
+
+from torchvision import datasets, transforms
+from torchvision.datasets.folder import DatasetFolder
+
 from PIL import Image
+import pydicom
 
 
 class ImageFolderWithPaths(datasets.ImageFolder):
@@ -147,3 +151,22 @@ class MultiViewDataSetWithPaths(MultiViewDataSet):
         tuple_with_path = (original_tuple + (view_paths,))
 
         return tuple_with_path
+
+
+def dcm_loader(path):
+    with open(path, 'rb') as fn:
+        dicom_img = pydicom.dcmread(str(fn)).pixel_array
+        img = Image.fromarray(dicom_img).convert('RGB')
+
+        return img
+
+
+class DCMImageFolder(DatasetFolder):
+
+    def __init__(self, root, transform=None, target_transform=None,
+                 loader=dcm_loader, is_valid_file=None):
+        super(DCMImageFolder, self).__init__(root, loader, ('.dcm', ) if is_valid_file is None else None,
+                                             transform=transform,
+                                             target_transform=target_transform,
+                                             is_valid_file=is_valid_file)
+        self.imgs = self.samples

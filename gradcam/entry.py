@@ -122,7 +122,7 @@ def save_image(filename, tensor, de_mean, de_std):
     image.save(filename)
 
 
-def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, topk=1, cuda=True, perturb_magnitude=0.0):
+def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, target_layer="module.layer4", topk=1, cuda=True, perturb_magnitude=0.0, ids=None):
     """Generate Grad-CAM with original models"""
 
     device = get_device(cuda)
@@ -137,7 +137,8 @@ def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, 
 
     # Here we choose the last convolution layer
     # target_layers = ["module.relu", "module.layer1", "module.layer2", "module.layer3", "module.layer4"]
-    target_layers = ["module.layer4"]
+    # target_layers = ["module.layer4"]
+    target_layers = [target_layer]
 
     # Images
     image_names = []
@@ -159,6 +160,10 @@ def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, 
 
     gcam = GradCAM(model=cnn, perturb_magnitude=perturb_magnitude)
     perturbed_images, (probs, ids) = gcam.forward(images)
+
+    # replace ids OOD ids
+    if ids is not None:
+        ids = ids
 
     # # save original images and perturbed images
     # print("Saving resized and perturbed image...")
@@ -184,8 +189,8 @@ def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, 
 
             for j in range(len(images)):
 
-                # # copy original image
-                # shutil.copy(image_paths[j], output_dir)
+                # copy original image
+                shutil.copy(image_paths[j], output_dir)
 
                 print("\t#{}: {} ({:.5f})".format(image_names[j], ids[j, i], probs[j, i]))
 
@@ -193,6 +198,7 @@ def base_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, threshold, 
                     filename=osp.join(
                         output_dir,
                         "{}-gradcam-{}-{}-{}.png".format(
+                            # image_names[j], target_layer.replace('module.', ''), labels.cpu().detach().numpy()[j, 0], ids[j, i]
                             image_names[j], target_layer.replace('module.', ''), labels.cpu().detach().numpy()[j], ids[j, i]
                         ),
                     ),
@@ -260,7 +266,7 @@ def ensemble_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, thresho
     # labels = labels.to(device)
 
     gcam = GradCAM(model=cnn)
-    probs, ids = gcam.forward(images)
+    perturbed_images, (probs, ids) = gcam.forward(images)
 
     gcam.backward(ids=ids[:, [0]])
     regions = gcam.generate_ensemble(target_layers=target_layers)
@@ -294,31 +300,30 @@ def ensemble_cam(image_inputs, mean, std, labels, cnn, output_dir, conf, thresho
 
         print("\t#{}: {} ({:.5f})".format(image_names[j], ids[j, 0], probs[j, 0]))
 
-        probs = probs.cpu().detach().numpy()
-        ids = ids.cpu().detach().numpy()
-        regions = regions.cpu().detach().numpy()
+        # ids = ids.cpu().detach().numpy()
+        # regions = regions.cpu().detach().numpy()
 
         save_gradcam(
             filename=osp.join(
                 output_dir,
                 "{}-gradcam-{}-{}-{}.png".format(
-                    image_names[j], target_layers[0].replace('module.', ''), labels[j, 0], ids[j, 0]
+                    image_names[j], 'en_layer4', labels[j, 0], ids[j, 0]
                 ),
             ),
             gcam=regions[j, 0],
             raw_image=raw_images[j]
         )
 
-        # ToDo: threshold to be learned
-        if probs[j, 0] > conf:
-            save_segmentation(
-                filename=osp.join(
-                    output_dir,
-                    "{}_segmentation.png".format(image_names[j]),
-                ),
-                gcam=regions[j, 0],
-                threshold=threshold
-            )
+        # # ToDo: threshold to be learned
+        # if probs[j, 0] > conf:
+        #     save_segmentation(
+        #         filename=osp.join(
+        #             output_dir,
+        #             "{}_segmentation.png".format(image_names[j]),
+        #         ),
+        #         gcam=regions[j, 0],
+        #         threshold=threshold
+        #     )
 
 
 def multiview_cam(images, labels, paths, cnn, output_dir, conf, threshold, gradcam_alg='grad_pooling', topk=1, cuda=True):

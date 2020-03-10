@@ -13,19 +13,21 @@
 
 
 import os
+import random
 import numpy as np
 from shutil import copy
 
 import torch
 from torchvision import datasets, transforms
 
-# from utils import classifier_dataloader
+from utils import classifier_dataloader
 
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # classes = ['No Finding', 'Enlarged Cardiomediastinum', 'Cardiomegaly', 'Lung Opacity', 'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 'Pleural Effusion', 'Pleural Other', 'Fracture']
-classes = ['No Finding', 'Cardiomegaly', 'Lung Opacity', 'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 'Pleural Effusion', 'Pleural Other', 'Fracture']
+# classes = ['Cardiomegaly', 'Consolidation', 'Edema', 'Pleural Effusion']
+classes = ['Edema']
 
 def prepare_multiview_data(in_csv, out_dir, class_label, mode):
     with open('%s/%s.csv' % (in_csv, mode), 'r') as csv_file:
@@ -91,7 +93,7 @@ def prepare_multiview_data(in_csv, out_dir, class_label, mode):
                     raise RuntimeError('invalid view')
 
 
-def prepare_singleview_data(in_csv, out_dir, class_label, mode):
+def prepare_singleview_data(in_csv, out_dir, class_label, view, mode):
     with open('%s/%s.csv' % (in_csv, mode), 'r') as csv_file:
 
         # get column name
@@ -100,33 +102,78 @@ def prepare_singleview_data(in_csv, out_dir, class_label, mode):
 
         # get column index of class label
         class_idx = column_name.index(class_label)
+        view_idx = column_name.index('Frontal/Lateral')
 
         samples = 0
         for line in csv_file:
             sample = line.split(',')
 
-            if (sample[class_idx] == '1.0') or (sample[class_idx] == '0.0'):
+            # only get frontal data
+            if (view is None) or (sample[view_idx] == view):
 
-                samples = samples + 1
+                if (sample[class_idx] == '1.0') or (sample[class_idx] == '0.0'):
 
-                # print('Found one {} sample {}'.format(label, save_path))
-                if samples % 1000 == 0:
-                    print('Found {} samples'.format(samples))
+                    samples = samples + 1
 
-                label = int(float(sample[class_idx]))
+                    # print('Found one {} sample {}'.format(label, save_path))
+                    if samples % 1000 == 0:
+                        print('Found {} samples'.format(samples))
 
-                save_path = '%s/%s_%s/%d' % (out_dir, class_label.lower().replace(' ', '_'), mode, label)
-                if not os.path.exists(save_path):
-                    os.makedirs(save_path)
+                    label = int(float(sample[class_idx]))
 
-                # path = '../data/' + sample[column_name.index('Path')]
-                # path_list = path.split('/')
-                # path_list[-1] = '%d.jpg' % samples
+                    save_known_path = '%s/%s_%s_%s/%d' % (out_dir, class_label.lower().replace(' ', '_'), view.lower(), mode, label)
+                    if not os.path.exists(save_known_path):
+                        os.makedirs(save_known_path)
 
-                try:
-                    copy('../data/' + sample[column_name.index('Path')], '%s/%s.jpg' % (save_path, samples))
-                except:
-                    continue
+                    # path = '../data/' + sample[column_name.index('Path')]
+                    # path_list = path.split('/')
+                    # path_list[-1] = '%d.jpg' % samples
+
+                    if os.path.isfile('../data/' + sample[column_name.index('Path')]):
+                        os.symlink('../../../' + sample[column_name.index('Path')], '%s/%s.jpg' % (save_known_path, samples))
+                        # copy('../data/' + sample[column_name.index('Path')], '%s/%s.jpg' % (save_known_path, samples))
+
+                elif sample[class_idx] == '-1.0':
+                    samples = samples + 1
+
+                    save_unknown_path = '%s/%s_%s_ood/unknown' % (out_dir, class_label.lower().replace(' ', '_'), view.lower())
+                    if not os.path.exists(save_unknown_path):
+                        os.makedirs(save_unknown_path)
+
+                    if os.path.isfile('../data/' + sample[column_name.index('Path')]):
+                        os.symlink('../../../' + sample[column_name.index('Path')], '%s/%s.jpg' % (save_unknown_path, samples))
+
+
+def prepare_singleview_ood_data(in_csv, out_dir, class_label, view, mode):
+    with open('%s/%s.csv' % (in_csv, mode), 'r') as csv_file:
+
+        # get column name
+        column_name = csv_file.readline().split(',')
+        # print(column_name)
+
+        # get column index of class label
+        class_idx = column_name.index(class_label)
+        view_idx = column_name.index('Frontal/Lateral')
+
+        samples = 0
+        for line in csv_file:
+            sample = line.split(',')
+
+            # only get frontal data
+            if (view is None) or (sample[view_idx] == view):
+
+                if (sample[class_idx] == '-1.0') and (random.uniform(0, 1) <= 0.5):
+                    samples = samples + 1
+
+                    save_unknown_path = '%s/%s_%s_ood/unknown' % (out_dir, class_label.lower().replace(' ', '_'), view.lower())
+                    if not os.path.exists(save_unknown_path):
+                        os.makedirs(save_unknown_path)
+
+                    if os.path.isfile('../data/' + sample[column_name.index('Path')]):
+                        os.symlink('../../../' + sample[column_name.index('Path')], '%s/%s.jpg' % (save_unknown_path, samples))
+
+                    if samples >= 100:
+                        return
 
 
 def get_multiview_data_statistics(dataset, task):
@@ -174,8 +221,8 @@ def get_multiview_data_statistics(dataset, task):
     return pop_mean, pop_std0, pop_std1
 
 
-def get_singleview_data_statistics(dataset, task):
-    data_path = '../data/%s/%s_training' % (dataset, task)
+def get_singleview_data_statistics(dataset, task, view):
+    data_path = '../data/%s/%s_%s_training' % (dataset, task.lower().replace(' ', '_'), view.lower())
 
     """compute image data statistics (mean, std)"""
     data_transform = transforms.Compose([transforms.Resize(size=(224, 224)),
@@ -215,15 +262,29 @@ def get_singleview_data_statistics(dataset, task):
     print(pop_mean)
     print(pop_std0)
 
+
     return pop_mean, pop_std0, pop_std1
 
 
 # prepare_multiview_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert_multiview', class_label='Consolidation', mode='validation')
 # get_multiview_data_statistics('chexpert_multiview', 'consolidation')
 
-# prepare_singleview_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert', class_label='Enlarged Cardiomediastinum', mode='training')
-# get_singleview_data_statistics('chexpert', 'enlarged_cardiomediastinum')
+# for c in classes:
+#
+#     try:
+#         print('getting statistics of %s...' % c)
+#         get_singleview_data_statistics('chexpert', c, view='Frontal')
+#
+#     except:
+#         continue
 
 for c in classes:
-    print('processing %s...' % c)
-    prepare_singleview_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert', class_label=c, mode='training')
+    # print('processing %s training ...' % c)
+    # prepare_singleview_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert', class_label=c, view='Frontal', mode='training')
+
+    print('processing %s validation ...' % c)
+    prepare_singleview_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert', class_label=c, view='Frontal', mode='validation')
+
+# for c in classes:
+#     prepare_singleview_ood_data(in_csv='../data/CheXpert-v1.0', out_dir='../data/chexpert', class_label=c, view='Frontal', mode='training')
+

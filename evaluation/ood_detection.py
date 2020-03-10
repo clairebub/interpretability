@@ -24,7 +24,7 @@ class Baseline(object):
         self.cnn.zero_grad()
 
         self.prepare(train_loader, val_loader)
-        self.in_domain_scores = self.get_scores(val_loader)
+        # self.in_domain_scores = self.get_scores(val_loader)
 
         self.perturb_magnitude = 0.0
 
@@ -38,12 +38,12 @@ class Baseline(object):
         else:
             logits = x
         prob = F.softmax(logits, dim=1)
-        score, _ = prob.max(dim=1)
-        return score
+        score, score_idx = prob.max(dim=1)
+        return score, score_idx
 
     def get_scores(self, dataloader):
         self.cnn.eval()
-        scores = []
+        scores, scores_idx = [], []
         for input, target in dataloader:
 
             input = input.cuda()
@@ -55,15 +55,16 @@ class Baseline(object):
             else:
                 output = self.cnn.forward(input)
 
-            score = self.scoring(output)
+            score, score_idx = self.scoring(output)
 
             scores.extend(score.cpu().detach().numpy())
+            scores_idx.extend(score_idx.cpu().detach().numpy())
 
-        return scores
+        return scores, scores_idx
 
-    def ood_eval(self, ood_loader):
-        score_in = self.in_domain_scores
-        score_out = self.get_scores(ood_loader)
+    def ood_eval(self, val_loader, ood_loader):
+        score_in, _ = self.get_scores(val_loader)
+        score_out, _ = self.get_scores(ood_loader)
 
         score_all = np.concatenate([score_in, score_out])
         domain_labels = np.zeros(len(score_all))
@@ -112,12 +113,13 @@ class InputPreProcess(Baseline):
             loss_list = {}
             for m in magnitude_list:
                 loss_meter = AverageMeter()
-                for input, _, _ in dataloader:  # Here we don't need labels
+                for input, _ in dataloader:  # Here we don't need labels
 
                     input = input.cuda().requires_grad_(True)
 
                     output = self.cnn.forward(input)
-                    loss = -self.scoring(output).mean()
+                    loss_score, _ = self.scoring(output)
+                    loss = -loss_score.mean()
                     loss.backward()
 
                     gradient = torch.ge(input.grad.data, 0)
@@ -125,7 +127,8 @@ class InputPreProcess(Baseline):
                     modified_input = torch.add(input.detach(), -m, gradient)
 
                     output = self.cnn.forward(modified_input)
-                    loss = -self.scoring(output)
+                    loss, _ = self.scoring(output)
+                    loss = -loss
                     loss_meter.update(loss.mean(), len(loss))
                 loss_list[m] = loss_meter.avg
                 print('Magnitude:', m, 'loss:', loss_list[m])
@@ -134,7 +137,7 @@ class InputPreProcess(Baseline):
 
     def get_scores(self, dataloader):
         self.cnn.eval()
-        confidence = []
+        scores, scores_idx = [], []
         for input, _ in dataloader:
             input = input.cuda().requires_grad_(True)
 
@@ -143,7 +146,8 @@ class InputPreProcess(Baseline):
             else:
                 output = self.cnn.forward(input)
 
-            loss = -self.scoring(output).mean()
+            loss_score, _ = self.scoring(output)
+            loss = -loss_score.mean()
             loss.backward()
 
             gradient = torch.ge(input.grad.data, 0)
@@ -155,11 +159,12 @@ class InputPreProcess(Baseline):
             else:
                 output = self.cnn.forward(modified_input)
 
-            score = self.scoring(output)
+            score, score_idx = self.scoring(output)
 
-            confidence.extend(score.cpu().detach().numpy())
+            scores.extend(score.cpu().detach().numpy())
+            scores_idx.extend(score_idx.cpu().detach().numpy())
 
-        return confidence
+        return scores, scores_idx
 
 
 class ODIN(InputPreProcess):
@@ -191,14 +196,15 @@ class ODIN(InputPreProcess):
             logits = x
         logits /= 1000  # Temperature=1000 as suggested in ODIN paper
         prob = F.softmax(logits, dim=1)
-        score, _ = prob.max(dim=1)
-        return score
+        score, score_idx = prob.max(dim=1)
+        return score, score_idx
 
 
 class Mahalanobis(Baseline):
     def prepare(self, train_loader, val_loader):
         self.ood_cnn = copy.deepcopy(self.cnn)
-        self.init_mahalanobis(train_loader)
+        # self.init_mahalanobis(train_loader)
+        self.init_mahalanobis(val_loader)
 
     def init_mahalanobis(self, dataloader):
         if 'cosine' not in self.config.model_type:
@@ -249,9 +255,9 @@ class Mahalanobis(Baseline):
             else:
                 gaussian_score = torch.cat((gaussian_score, term_gau.view(-1, 1)), 1)
 
-        score, _ = gaussian_score.max(dim=1)
+        score, score_idx = gaussian_score.max(dim=1)
 
-        return score
+        return score, score_idx
 
     def get_ood_model(self, ood_model_file=None):
 
@@ -278,7 +284,8 @@ class Mahalanobis(Baseline):
 class Mahalanobis_IPP(Mahalanobis, InputPreProcess):
     def prepare(self, train_loader, val_loader):
         self.ood_cnn = copy.deepcopy(self.cnn)
-        self.init_mahalanobis(train_loader)
+        # self.init_mahalanobis(train_loader)
+        self.init_mahalanobis(val_loader)
         self.perturb_magnitude = self.search_perturb_magnitude(val_loader)
         print('Inputs are perturbed with magnitude', self.perturb_magnitude)
 
@@ -362,9 +369,9 @@ class DeepMahalanobis(Baseline):
                     gaussian_score = term_gau.view(-1, 1)
                 else:
                     gaussian_score = torch.cat((gaussian_score, term_gau.view(-1, 1)), 1)
-            deep_scores[:, i], _ = gaussian_score.max(dim=1)
+            deep_scores[:, i], score_idx = gaussian_score.max(dim=1)
 
-        return deep_scores.sum(dim=1)
+        return deep_scores.sum(dim=1), score_idx
 
 
 class DeepMahalanobis_IPP(DeepMahalanobis, InputPreProcess):
@@ -374,56 +381,56 @@ class DeepMahalanobis_IPP(DeepMahalanobis, InputPreProcess):
         print('Inputs are perturbed with magnitude', self.perturb_magnitude)
 
 
-class Disentangle_SYD(Baseline):
-    def scoring(self, x):
-        assert isinstance(x, dict), 'The model doesnt provide disentangled results'
-        return x['S_YD']
-
-
-class Disentangle_SYD_IPP(InputPreProcess):
-    def scoring(self, x):
-        assert isinstance(x, dict), 'The model doesnt provide disentangled results'
-        return x['S_YD']
-
-
-class Disentangle_SD(Baseline):
-    def scoring(self, x):
-        assert isinstance(x, dict), 'The model doesnt provide disentangled results'
-        return x['S_D']
-
-
-class Disentangle_SD_IPP(InputPreProcess):
-    def scoring(self, x):
-        assert isinstance(x, dict), 'The model doesnt provide disentangled results'
-        return x['S_D']
-
-
-class OfflineDisentangle_SYD(Baseline):
-    def __init__(self, baseObject):
-        super(OfflineDisentangle_SYD, self).__init__(baseObject)
-
-    def ood_prepare(self, dataloader):
-
-        self.log('Offline disentangle ...')
-        all_out = []
-        all_label = []
-        for input, target, _ in dataloader:
-            # The task id is ignored here
-
-            input = input.cuda()
-            target = target.cuda()
-
-            out = self.forward(input)
-            all_out.append(out)
-            all_label.append(target)
-        all_out = torch.cat(all_out)
-        all_label = torch.cat(all_label)
-        self.num_classes = len(torch.unique(all_label))
-        self.std = torch.zeros(self.num_classes, device=input.device)
-        for c in range(self.num_classes):
-            self.std[c] = all_out[all_label == c].std()
-        print('Distance std:', self.std.mean())
-
-    def score(self, x):
-        S_YD = x / self.std.view(1, -1)
-        return super(Disentangle, self).score(S_YD)
+# class Disentangle_SYD(Baseline):
+#     def scoring(self, x):
+#         assert isinstance(x, dict), 'The model doesnt provide disentangled results'
+#         return x['S_YD']
+#
+#
+# class Disentangle_SYD_IPP(InputPreProcess):
+#     def scoring(self, x):
+#         assert isinstance(x, dict), 'The model doesnt provide disentangled results'
+#         return x['S_YD']
+#
+#
+# class Disentangle_SD(Baseline):
+#     def scoring(self, x):
+#         assert isinstance(x, dict), 'The model doesnt provide disentangled results'
+#         return x['S_D']
+#
+#
+# class Disentangle_SD_IPP(InputPreProcess):
+#     def scoring(self, x):
+#         assert isinstance(x, dict), 'The model doesnt provide disentangled results'
+#         return x['S_D']
+#
+#
+# class OfflineDisentangle_SYD(Baseline):
+#     def __init__(self, baseObject):
+#         super(OfflineDisentangle_SYD, self).__init__(baseObject)
+#
+#     def ood_prepare(self, dataloader):
+#
+#         self.log('Offline disentangle ...')
+#         all_out = []
+#         all_label = []
+#         for input, target, _ in dataloader:
+#             # The task id is ignored here
+#
+#             input = input.cuda()
+#             target = target.cuda()
+#
+#             out = self.forward(input)
+#             all_out.append(out)
+#             all_label.append(target)
+#         all_out = torch.cat(all_out)
+#         all_label = torch.cat(all_label)
+#         self.num_classes = len(torch.unique(all_label))
+#         self.std = torch.zeros(self.num_classes, device=input.device)
+#         for c in range(self.num_classes):
+#             self.std[c] = all_out[all_label == c].std()
+#         print('Distance std:', self.std.mean())
+#
+#     def score(self, x):
+#         S_YD = x / self.std.view(1, -1)
+#         return super(Disentangle, self).score(S_YD)

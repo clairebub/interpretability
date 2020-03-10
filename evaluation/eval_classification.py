@@ -62,7 +62,7 @@ def ood_eval_io(args, cnn, train_loader, test_loader, ood_loader, classes, ood_m
     # test OOD performance
     print("OOD performance:")
     ood_method = ood_detection.__dict__[ood_method](args, cnn, train_loader, test_loader, len(classes))
-    ood_performance = ood_method.ood_eval(ood_loader)
+    ood_performance = ood_method.ood_eval(test_loader, ood_loader)
 
     df = pd.DataFrame(ood_performance.items(), columns=["metric", "result"])
     print(df)
