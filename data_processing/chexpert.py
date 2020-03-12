@@ -1,14 +1,14 @@
 # ==================================================
 # Copyright (C) 2017-2020
-# author: yilin.shen
-# email: yilin.shen@samsung.com
+# author: Claire Tang
+# email: Claire Tang@gmail.com
 # Date: 2020-01-20
 #
 # This file is part of ImageClassification project.
 # Base model train/valid/test
 #
 # This can not be copied and/or distributed
-# without the express permission of yilin.shen
+# without the express permission of Claire Tang
 # ==================================================
 
 
@@ -25,9 +25,9 @@ from utils import classifier_dataloader
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-# classes = ['No Finding', 'Enlarged Cardiomediastinum', 'Cardiomegaly', 'Lung Opacity', 'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 'Pleural Effusion', 'Pleural Other', 'Fracture']
+classes = ['No Finding', 'Enlarged Cardiomediastinum', 'Cardiomegaly', 'Lung Opacity', 'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia', 'Atelectasis', 'Pneumothorax', 'Pleural Effusion', 'Pleural Other', 'Fracture']
 # classes = ['Cardiomegaly', 'Consolidation', 'Edema', 'Pleural Effusion']
-classes = ['Edema']
+#classes = ['Edema']
 
 def prepare_multiview_data(in_csv, out_dir, class_label, mode):
     with open('%s/%s.csv' % (in_csv, mode), 'r') as csv_file:

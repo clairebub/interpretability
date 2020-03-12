@@ -1,13 +1,13 @@
 # ==================================================
 # Copyright (C) 2017-2018
-# author: yilin.shen
-# email: yilin.shen@samsung.com
+# author: Claire Tang
+# email: Claire Tang@gmail.com
 # Date: 9/8/19
 #
 # This file is part of mri project.
 # 
 # This can not be copied and/or distributed 
-# without the express permission of yilin.shen
+# without the express permission of Claire Tang
 # ==================================================
 
 
