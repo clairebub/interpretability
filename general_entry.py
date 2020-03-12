@@ -1,16 +1,7 @@
-# ==================================================
-# Copyright (C) 2017-2018
-# author: yilin.shen
-# email: yilin.shen@samsung.com
-# Date: 2019-08-10
 #
-# This file is part of ImageClassification project.
-# Base model train/valid/test
+# Author: Claire Tang (claire.smurfs@gmail.com)
+# General entry for interpret2
 #
-# This can not be copied and/or distributed
-# without the express permission of yilin.shen
-# ==================================================
-
 import os
 import json
 import argparse
